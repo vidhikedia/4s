@@ -1,4 +1,5 @@
 import React, { useState, useMemo, useEffect, useRef } from 'react';
+import { createPortal } from 'react-dom';
 import { useSearchParams, Link, useNavigate } from 'react-router-dom';
 import {
   Users,
@@ -148,8 +149,20 @@ const Matches = () => {
           if (c) c.scrollTop = 0;
         });
       });
+
+      const handleKeyDown = (e) => {
+        if (e.key === 'Escape') {
+          setProfileModalPeer(null);
+          setMessageModalPeer(null);
+          setSessionModalPeer(null);
+          setMatchPopupData(null);
+        }
+      };
+      window.addEventListener('keydown', handleKeyDown);
+
       return () => {
         document.body.style.overflow = prevOverflow;
+        window.removeEventListener('keydown', handleKeyDown);
       };
     } else {
       document.body.style.overflow = '';
@@ -1080,120 +1093,134 @@ const Matches = () => {
       {/* ------------------------------------------------------------------
           Modal 3: Request a Session
           ------------------------------------------------------------------ */}
-      {sessionModalPeer && (
-        <div className="modal-overlay" onClick={() => setSessionModalPeer(null)}>
-          <div className="modal-card" style={{ maxWidth: '540px' }} onClick={(e) => e.stopPropagation()}>
-            <form onSubmit={handleScheduleSubmit}>
-              <div className="modal-header">
-                <h3>Request Skill Exchange with {sessionModalPeer.name}</h3>
-                <button
-                  type="button"
-                  className="modal-close-btn"
-                  onClick={() => setSessionModalPeer(null)}
-                >
-                  <X size={20} />
-                </button>
-              </div>
+      {sessionModalPeer &&
+        createPortal(
+          <div className="modal-overlay" onClick={() => setSessionModalPeer(null)}>
+            <div
+              className="modal-card"
+              style={{
+                maxWidth: '540px',
+                width: '100%',
+                maxHeight: 'calc(100vh - 2rem)',
+                maxHeight: 'calc(100dvh - 2rem)',
+                display: 'flex',
+                flexDirection: 'column',
+                overflow: 'hidden'
+              }}
+              onClick={(e) => e.stopPropagation()}
+            >
+              <form onSubmit={handleScheduleSubmit} style={{ display: 'flex', flexDirection: 'column', flex: 1, minHeight: 0, overflow: 'hidden' }}>
+                <div className="modal-header" style={{ flexShrink: 0 }}>
+                  <h3>Request Skill Exchange with {sessionModalPeer.name}</h3>
+                  <button
+                    type="button"
+                    className="modal-close-btn"
+                    onClick={() => setSessionModalPeer(null)}
+                  >
+                    <X size={20} />
+                  </button>
+                </div>
 
-              <div className="modal-body">
-                {/* Session Mentor Summary */}
-                <div style={{ backgroundColor: '#f8fafc', padding: '0.875rem 1rem', borderRadius: '0.5rem', border: '1px solid var(--border-color)' }}>
-                  <span className="text-xs text-muted">Peer Mentor:</span>
-                  <h4 className="text-base font-bold text-slate-900">{sessionModalPeer.name}</h4>
-                  <div className="flex items-center gap-2 mt-1">
-                    <span className="badge-id badge-teaching-id">Teaching ID: {sessionModalPeer.teachingId}</span>
-                    <span className="badge-id badge-course-id">Course ID: {sessionModalPeer.courseId}</span>
+                <div className="modal-body" style={{ flex: 1, overflowY: 'auto', minHeight: 0 }}>
+                  {/* Session Mentor Summary */}
+                  <div style={{ backgroundColor: '#f8fafc', padding: '0.875rem 1rem', borderRadius: '0.5rem', border: '1px solid var(--border-color)' }}>
+                    <span className="text-xs text-muted">Peer Mentor:</span>
+                    <h4 className="text-base font-bold text-slate-900">{sessionModalPeer.name}</h4>
+                    <div className="flex items-center gap-2 mt-1">
+                      <span className="badge-id badge-teaching-id">Teaching ID: {sessionModalPeer.teachingId}</span>
+                      <span className="badge-id badge-course-id">Course ID: {sessionModalPeer.courseId}</span>
+                    </div>
+                    <p className="text-xs text-primary font-semibold mt-1">
+                      Teaching: {sessionModalPeer.skillOffered} · Available: {sessionModalPeer.availability}
+                    </p>
                   </div>
-                  <p className="text-xs text-primary font-semibold mt-1">
-                    Teaching: {sessionModalPeer.skillOffered} · Available: {sessionModalPeer.availability}
-                  </p>
+
+                  {/* Session Topic */}
+                  <div className="form-group">
+                    <label className="form-label" htmlFor="sess-topic">
+                      Session Topic / Focus Area
+                    </label>
+                    <input
+                      id="sess-topic"
+                      type="text"
+                      className="form-input"
+                      value={sessionForm.topic}
+                      onChange={(e) => setSessionForm({ ...sessionForm, topic: e.target.value })}
+                      required
+                    />
+                  </div>
+
+                  {/* Date & Time */}
+                  <div className="form-group">
+                    <label className="form-label" htmlFor="sess-time">
+                      Proposed Date & Time Slot
+                    </label>
+                    <select
+                      id="sess-time"
+                      className="form-input"
+                      value={sessionForm.dateTime}
+                      onChange={(e) => setSessionForm({ ...sessionForm, dateTime: e.target.value })}
+                    >
+                      <option value="Tomorrow · 4:00 PM – 5:00 PM">Tomorrow · 4:00 PM – 5:00 PM</option>
+                      <option value="Thursday · 5:30 PM – 6:30 PM">Thursday · 5:30 PM – 6:30 PM</option>
+                      <option value="Friday · 5:00 PM – 6:00 PM">Friday · 5:00 PM – 6:00 PM</option>
+                      <option value="Saturday Morning · 10:30 AM – 11:30 AM">Saturday Morning · 10:30 AM – 11:30 AM</option>
+                      <option value="Sunday Afternoon · 3:00 PM – 4:00 PM">Sunday Afternoon · 3:00 PM – 4:00 PM</option>
+                    </select>
+                  </div>
+
+                  {/* Session Mode */}
+                  <div className="form-group">
+                    <label className="form-label" htmlFor="sess-mode">
+                      Meeting Mode
+                    </label>
+                    <select
+                      id="sess-mode"
+                      className="form-input"
+                      value={sessionForm.mode}
+                      onChange={(e) => setSessionForm({ ...sessionForm, mode: e.target.value })}
+                    >
+                      <option value="Google Meet">Google Meet (Online Video & Screen Share)</option>
+                      <option value="Campus Central Library">Campus Central Library (Study Room Table 2)</option>
+                      <option value="CS Department Lab">CS Department Lab (Workstation 14)</option>
+                      <option value="Hostel Common Room">Hostel Common Study Lounge</option>
+                    </select>
+                  </div>
+
+                  {/* Notes */}
+                  <div className="form-group">
+                    <label className="form-label" htmlFor="sess-notes">
+                      Agenda or Specific Questions
+                    </label>
+                    <textarea
+                      id="sess-notes"
+                      rows={3}
+                      className="form-input"
+                      value={sessionForm.notes}
+                      onChange={(e) => setSessionForm({ ...sessionForm, notes: e.target.value })}
+                      placeholder="List specific assignment problems or topics you'd like to cover..."
+                    />
+                  </div>
                 </div>
 
-                {/* Session Topic */}
-                <div className="form-group">
-                  <label className="form-label" htmlFor="sess-topic">
-                    Session Topic / Focus Area
-                  </label>
-                  <input
-                    id="sess-topic"
-                    type="text"
-                    className="form-input"
-                    value={sessionForm.topic}
-                    onChange={(e) => setSessionForm({ ...sessionForm, topic: e.target.value })}
-                    required
-                  />
-                </div>
-
-                {/* Date & Time */}
-                <div className="form-group">
-                  <label className="form-label" htmlFor="sess-time">
-                    Proposed Date & Time Slot
-                  </label>
-                  <select
-                    id="sess-time"
-                    className="form-input"
-                    value={sessionForm.dateTime}
-                    onChange={(e) => setSessionForm({ ...sessionForm, dateTime: e.target.value })}
+                <div className="modal-footer" style={{ flexShrink: 0 }}>
+                  <button
+                    type="button"
+                    className="btn btn-outline"
+                    onClick={() => setSessionModalPeer(null)}
                   >
-                    <option value="Tomorrow · 4:00 PM – 5:00 PM">Tomorrow · 4:00 PM – 5:00 PM</option>
-                    <option value="Thursday · 5:30 PM – 6:30 PM">Thursday · 5:30 PM – 6:30 PM</option>
-                    <option value="Friday · 5:00 PM – 6:00 PM">Friday · 5:00 PM – 6:00 PM</option>
-                    <option value="Saturday Morning · 10:30 AM – 11:30 AM">Saturday Morning · 10:30 AM – 11:30 AM</option>
-                    <option value="Sunday Afternoon · 3:00 PM – 4:00 PM">Sunday Afternoon · 3:00 PM – 4:00 PM</option>
-                  </select>
+                    Cancel
+                  </button>
+                  <button type="submit" className="btn btn-primary">
+                    <Calendar size={15} />
+                    <span>Send Request</span>
+                  </button>
                 </div>
-
-                {/* Session Mode */}
-                <div className="form-group">
-                  <label className="form-label" htmlFor="sess-mode">
-                    Meeting Mode
-                  </label>
-                  <select
-                    id="sess-mode"
-                    className="form-input"
-                    value={sessionForm.mode}
-                    onChange={(e) => setSessionForm({ ...sessionForm, mode: e.target.value })}
-                  >
-                    <option value="Google Meet">Google Meet (Online Video & Screen Share)</option>
-                    <option value="Campus Central Library">Campus Central Library (Study Room Table 2)</option>
-                    <option value="CS Department Lab">CS Department Lab (Workstation 14)</option>
-                    <option value="Hostel Common Room">Hostel Common Study Lounge</option>
-                  </select>
-                </div>
-
-                {/* Notes */}
-                <div className="form-group">
-                  <label className="form-label" htmlFor="sess-notes">
-                    Agenda or Specific Questions
-                  </label>
-                  <textarea
-                    id="sess-notes"
-                    rows={3}
-                    className="form-input"
-                    value={sessionForm.notes}
-                    onChange={(e) => setSessionForm({ ...sessionForm, notes: e.target.value })}
-                    placeholder="List specific assignment problems or topics you'd like to cover..."
-                  />
-                </div>
-              </div>
-
-              <div className="modal-footer">
-                <button
-                  type="button"
-                  className="btn btn-outline"
-                  onClick={() => setSessionModalPeer(null)}
-                >
-                  Cancel
-                </button>
-                <button type="submit" className="btn btn-primary">
-                  <Calendar size={15} />
-                  <span>Send Request</span>
-                </button>
-              </div>
-            </form>
-          </div>
-        </div>
-      )}
+              </form>
+            </div>
+          </div>,
+          document.body
+        )}
 
       {/* Real Match Found Handshake Popup */}
       {matchPopupData && (

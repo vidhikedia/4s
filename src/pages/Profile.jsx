@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useCallback } from 'react';
+import { createPortal } from 'react-dom';
 import { Link, useNavigate } from 'react-router-dom';
 import {
   User,
@@ -68,6 +69,25 @@ const Profile = () => {
 
   // Shared 10-second polling, window focus and request change listener
   useLiveRefresh(fetchProfile, 10000);
+
+  // Lock body scroll and handle Escape key for edit modal
+  useEffect(() => {
+    if (!isEditModalOpen) return;
+    const prevOverflow = document.body.style.overflow;
+    document.body.style.overflow = 'hidden';
+
+    const handleKeyDown = (e) => {
+      if (e.key === 'Escape') {
+        setIsEditModalOpen(false);
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+
+    return () => {
+      document.body.style.overflow = prevOverflow;
+      window.removeEventListener('keydown', handleKeyDown);
+    };
+  }, [isEditModalOpen]);
 
   const handleOpenEdit = () => {
     setEditForm({
@@ -543,136 +563,140 @@ const Profile = () => {
         )}
 
         {/* Edit Profile Modal */}
-        {isEditModalOpen && (
-          <div className="profile-modal-overlay">
-            <div className="profile-modal-card">
-              <div
-                style={{
-                  padding: '1.25rem 1.5rem',
-                  borderBottom: '1px solid var(--border-color)',
-                  display: 'flex',
-                  alignItems: 'center',
-                  justifyContent: 'space-between'
-                }}
-              >
-                <h3 className="font-bold text-lg text-slate-900">
-                  Edit Student Profile
-                </h3>
-                <button
-                  type="button"
-                  onClick={() => setIsEditModalOpen(false)}
+        {isEditModalOpen &&
+          createPortal(
+            <div className="profile-modal-overlay" onClick={() => setIsEditModalOpen(false)}>
+              <div className="profile-modal-card" onClick={(e) => e.stopPropagation()}>
+                <div
                   style={{
-                    background: 'none',
-                    border: 'none',
-                    color: '#94a3b8',
-                    cursor: 'pointer'
+                    padding: '1.25rem 1.5rem',
+                    borderBottom: '1px solid var(--border-color)',
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'space-between',
+                    flexShrink: 0
                   }}
                 >
-                  <X size={20} />
-                </button>
-              </div>
+                  <h3 className="font-bold text-lg text-slate-900">
+                    Edit Student Profile
+                  </h3>
+                  <button
+                    type="button"
+                    onClick={() => setIsEditModalOpen(false)}
+                    style={{
+                      background: 'none',
+                      border: 'none',
+                      color: '#94a3b8',
+                      cursor: 'pointer'
+                    }}
+                  >
+                    <X size={20} />
+                  </button>
+                </div>
 
-              <form onSubmit={handleSaveProfile}>
-                <div style={{ padding: '1.5rem', display: 'flex', flexDirection: 'column', gap: '1rem' }}>
-                  {/* Full Name */}
-                  <div className="form-group">
-                    <label className="form-label font-bold">
-                      Full Name <span className="text-red-500">*</span>
-                    </label>
-                    <input
-                      type="text"
-                      className="form-control"
-                      value={editForm.name}
-                      onChange={(e) => setEditForm({ ...editForm, name: e.target.value })}
-                      required
-                    />
-                  </div>
-
-                  {/* Email */}
-                  <div className="form-group">
-                    <label className="form-label font-bold">
-                      College Email <span className="text-red-500">*</span>
-                    </label>
-                    <input
-                      type="email"
-                      className="form-control"
-                      value={editForm.email}
-                      onChange={(e) => setEditForm({ ...editForm, email: e.target.value })}
-                      required
-                    />
-                  </div>
-
-                  {/* Department & Year Row */}
-                  <div className="grid grid-cols-2 gap-3">
+                <form onSubmit={handleSaveProfile} style={{ display: 'flex', flexDirection: 'column', flex: 1, minHeight: 0, overflow: 'hidden' }}>
+                  <div className="profile-modal-body" style={{ padding: '1.5rem', display: 'flex', flexDirection: 'column', gap: '1rem', flex: 1, overflowY: 'auto', minHeight: 0 }}>
+                    {/* Full Name */}
                     <div className="form-group">
-                      <label className="form-label font-bold">Department / Major</label>
+                      <label className="form-label font-bold">
+                        Full Name <span className="text-red-500">*</span>
+                      </label>
                       <input
                         type="text"
                         className="form-control"
-                        value={editForm.department}
-                        onChange={(e) =>
-                          setEditForm({ ...editForm, department: e.target.value })
-                        }
+                        value={editForm.name}
+                        onChange={(e) => setEditForm({ ...editForm, name: e.target.value })}
                         required
                       />
                     </div>
 
+                    {/* Email */}
                     <div className="form-group">
-                      <label className="form-label font-bold">Year of Study</label>
-                      <select
+                      <label className="form-label font-bold">
+                        College Email <span className="text-red-500">*</span>
+                      </label>
+                      <input
+                        type="email"
                         className="form-control"
-                        value={editForm.year}
-                        onChange={(e) => setEditForm({ ...editForm, year: e.target.value })}
-                      >
-                        <option value="1st Year">1st Year</option>
-                        <option value="2nd Year">2nd Year</option>
-                        <option value="3rd Year">3rd Year</option>
-                        <option value="4th Year">4th Year</option>
-                        <option value="Postgraduate">Postgraduate</option>
-                      </select>
+                        value={editForm.email}
+                        onChange={(e) => setEditForm({ ...editForm, email: e.target.value })}
+                        required
+                      />
+                    </div>
+
+                    {/* Department & Year Row */}
+                    <div className="grid grid-cols-2 gap-3">
+                      <div className="form-group">
+                        <label className="form-label font-bold">Department / Major</label>
+                        <input
+                          type="text"
+                          className="form-control"
+                          value={editForm.department}
+                          onChange={(e) =>
+                            setEditForm({ ...editForm, department: e.target.value })
+                          }
+                          required
+                        />
+                      </div>
+
+                      <div className="form-group">
+                        <label className="form-label font-bold">Year of Study</label>
+                        <select
+                          className="form-control"
+                          value={editForm.year}
+                          onChange={(e) => setEditForm({ ...editForm, year: e.target.value })}
+                        >
+                          <option value="1st Year">1st Year</option>
+                          <option value="2nd Year">2nd Year</option>
+                          <option value="3rd Year">3rd Year</option>
+                          <option value="4th Year">4th Year</option>
+                          <option value="Postgraduate">Postgraduate</option>
+                        </select>
+                      </div>
+                    </div>
+
+                    {/* Bio */}
+                    <div className="form-group">
+                      <label className="form-label font-bold">Short Bio</label>
+                      <textarea
+                        className="form-control"
+                        rows={4}
+                        value={editForm.bio}
+                        onChange={(e) => setEditForm({ ...editForm, bio: e.target.value })}
+                        placeholder="Tell campus peers what you enjoy teaching and what you are eager to learn..."
+                      />
                     </div>
                   </div>
 
-                  {/* Bio */}
-                  <div className="form-group">
-                    <label className="form-label font-bold">Short Bio</label>
-                    <textarea
-                      className="form-control"
-                      rows={4}
-                      value={editForm.bio}
-                      onChange={(e) => setEditForm({ ...editForm, bio: e.target.value })}
-                      placeholder="Tell campus peers what you enjoy teaching and what you are eager to learn..."
-                    />
-                  </div>
-                </div>
-
-                <div
-                  style={{
-                    padding: '1rem 1.5rem',
-                    borderTop: '1px solid var(--border-color)',
-                    backgroundColor: '#f8fafc',
-                    display: 'flex',
-                    alignItems: 'center',
-                    justifyContent: 'flex-end',
-                    gap: '0.75rem'
-                  }}
-                >
-                  <button
-                    type="button"
-                    className="btn btn-outline"
-                    onClick={() => setIsEditModalOpen(false)}
+                  <div
+                    style={{
+                      padding: '1rem 1.5rem',
+                      borderTop: '1px solid var(--border-color)',
+                      backgroundColor: '#f8fafc',
+                      display: 'flex',
+                      alignItems: 'center',
+                      justifyContent: 'flex-end',
+                      gap: '0.75rem',
+                      flexShrink: 0
+                    }}
                   >
-                    Cancel
-                  </button>
-                  <button type="submit" className="btn btn-primary">
-                    <CheckCircle2 size={16} />
-                    <span>Save Changes</span>
-                  </button>
-                </div>
-              </form>
-            </div>
-          </div>
-        )}
+                    <button
+                      type="button"
+                      className="btn btn-outline"
+                      onClick={() => setIsEditModalOpen(false)}
+                    >
+                      Cancel
+                    </button>
+                    <button type="submit" className="btn btn-primary">
+                      <CheckCircle2 size={16} />
+                      <span>Save Changes</span>
+                    </button>
+                  </div>
+                </form>
+              </div>
+            </div>,
+            document.body
+          )}
       </div>
     </div>
   );

@@ -1,4 +1,5 @@
 import React, { useState, useMemo, useEffect } from 'react';
+import { createPortal } from 'react-dom';
 import { useSearchParams, useNavigate, Link } from 'react-router-dom';
 import {
   Search,
@@ -68,6 +69,25 @@ const ExploreSkills = () => {
       setToastMessage(null);
     }, 3500);
   };
+
+  // Lock body scroll and handle Escape key for request modal
+  useEffect(() => {
+    if (!requestModalSkill) return;
+    const prevOverflow = document.body.style.overflow;
+    document.body.style.overflow = 'hidden';
+
+    const handleKeyDown = (e) => {
+      if (e.key === 'Escape') {
+        setRequestModalSkill(null);
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+
+    return () => {
+      document.body.style.overflow = prevOverflow;
+      window.removeEventListener('keydown', handleKeyDown);
+    };
+  }, [requestModalSkill]);
 
   const [skillsList, setSkillsList] = useState([]);
 
@@ -496,83 +516,97 @@ const ExploreSkills = () => {
       {/* ------------------------------------------------------------------
           Modal 2: Request to Learn Form
           ------------------------------------------------------------------ */}
-      {requestModalSkill && (
-        <div className="modal-overlay" onClick={() => setRequestModalSkill(null)}>
-          <div className="modal-card" onClick={(e) => e.stopPropagation()}>
-            <form onSubmit={handleSubmitRequest}>
-              <div className="modal-header">
-                <h3>Request to Learn</h3>
-                <button
-                  type="button"
-                  className="modal-close-btn"
-                  onClick={() => setRequestModalSkill(null)}
-                  aria-label="Close modal"
-                >
-                  <X size={20} />
-                </button>
-              </div>
-
-              <div className="modal-body">
-                {/* Skill summary box */}
-                <div style={{ backgroundColor: '#f8fafc', padding: '0.875rem 1rem', borderRadius: '0.5rem', border: '1px solid var(--border-color)' }}>
-                  <p className="text-xs text-muted">You are requesting a 1-on-1 peer session for:</p>
-                  <h4 className="text-base font-bold text-slate-900 mt-1">{requestModalSkill.name}</h4>
-                  <p className="text-xs text-primary font-semibold mt-0.5">Mentor: {requestModalSkill.mentorName} ({requestModalSkill.mentorDept})</p>
-                </div>
-
-                {/* Preferred time slot */}
-                <div className="form-group">
-                  <label className="form-label" htmlFor="req-slot">
-                    Your Preferred Session Timing
-                  </label>
-                  <select
-                    id="req-slot"
-                    className="form-input"
-                    value={requestTimeSlot}
-                    onChange={(e) => setRequestTimeSlot(e.target.value)}
+      {requestModalSkill &&
+        createPortal(
+          <div className="modal-overlay" onClick={() => setRequestModalSkill(null)}>
+            <div
+              className="modal-card"
+              style={{
+                maxWidth: '520px',
+                width: '100%',
+                maxHeight: 'calc(100vh - 2rem)',
+                maxHeight: 'calc(100dvh - 2rem)',
+                display: 'flex',
+                flexDirection: 'column',
+                overflow: 'hidden'
+              }}
+              onClick={(e) => e.stopPropagation()}
+            >
+              <form onSubmit={handleSubmitRequest} style={{ display: 'flex', flexDirection: 'column', flex: 1, minHeight: 0, overflow: 'hidden' }}>
+                <div className="modal-header" style={{ flexShrink: 0 }}>
+                  <h3>Request to Learn</h3>
+                  <button
+                    type="button"
+                    className="modal-close-btn"
+                    onClick={() => setRequestModalSkill(null)}
+                    aria-label="Close modal"
                   >
-                    <option value="Weekday Evening (5 PM – 7 PM)">Weekday Evening (5 PM – 7 PM)</option>
-                    <option value="Weekday Afternoon (2 PM – 4 PM)">Weekday Afternoon (2 PM – 4 PM)</option>
-                    <option value="Weekend Morning (10 AM – 12 PM)">Weekend Morning (10 AM – 12 PM)</option>
-                    <option value="Weekend Afternoon (3 PM – 5 PM)">Weekend Afternoon (3 PM – 5 PM)</option>
-                    <option value="Flexible (Mutual Schedule)">Flexible (Mutual Schedule)</option>
-                  </select>
+                    <X size={20} />
+                  </button>
                 </div>
 
-                {/* Personal learning note */}
-                <div className="form-group">
-                  <label className="form-label" htmlFor="req-note">
-                    Message / What do you want to learn?
-                  </label>
-                  <textarea
-                    id="req-note"
-                    rows={4}
-                    className="form-input"
-                    value={requestNote}
-                    onChange={(e) => setRequestNote(e.target.value)}
-                    required
-                    placeholder="Tell the student mentor what specific topics or project questions you need help with..."
-                  />
-                </div>
-              </div>
+                <div className="modal-body" style={{ flex: 1, overflowY: 'auto', minHeight: 0 }}>
+                  {/* Skill summary box */}
+                  <div style={{ backgroundColor: '#f8fafc', padding: '0.875rem 1rem', borderRadius: '0.5rem', border: '1px solid var(--border-color)' }}>
+                    <p className="text-xs text-muted">You are requesting a 1-on-1 peer session for:</p>
+                    <h4 className="text-base font-bold text-slate-900 mt-1">{requestModalSkill.name}</h4>
+                    <p className="text-xs text-primary font-semibold mt-0.5">Mentor: {requestModalSkill.mentorName} ({requestModalSkill.mentorDept})</p>
+                  </div>
 
-              <div className="modal-footer">
-                <button
-                  type="button"
-                  className="btn btn-outline"
-                  onClick={() => setRequestModalSkill(null)}
-                >
-                  Cancel
-                </button>
-                <button type="submit" className="btn btn-primary">
-                  <Send size={15} />
-                  <span>Send Learning Request</span>
-                </button>
-              </div>
-            </form>
-          </div>
-        </div>
-      )}
+                  {/* Preferred time slot */}
+                  <div className="form-group">
+                    <label className="form-label" htmlFor="req-slot">
+                      Your Preferred Session Timing
+                    </label>
+                    <select
+                      id="req-slot"
+                      className="form-input"
+                      value={requestTimeSlot}
+                      onChange={(e) => setRequestTimeSlot(e.target.value)}
+                    >
+                      <option value="Weekday Evening (5 PM – 7 PM)">Weekday Evening (5 PM – 7 PM)</option>
+                      <option value="Weekday Afternoon (2 PM – 4 PM)">Weekday Afternoon (2 PM – 4 PM)</option>
+                      <option value="Weekend Morning (10 AM – 12 PM)">Weekend Morning (10 AM – 12 PM)</option>
+                      <option value="Weekend Afternoon (3 PM – 5 PM)">Weekend Afternoon (3 PM – 5 PM)</option>
+                      <option value="Flexible (Mutual Schedule)">Flexible (Mutual Schedule)</option>
+                    </select>
+                  </div>
+
+                  {/* Personal learning note */}
+                  <div className="form-group">
+                    <label className="form-label" htmlFor="req-note">
+                      Message / What do you want to learn?
+                    </label>
+                    <textarea
+                      id="req-note"
+                      rows={4}
+                      className="form-input"
+                      value={requestNote}
+                      onChange={(e) => setRequestNote(e.target.value)}
+                      required
+                      placeholder="Tell the student mentor what specific topics or project questions you need help with..."
+                    />
+                  </div>
+                </div>
+
+                <div className="modal-footer" style={{ flexShrink: 0 }}>
+                  <button
+                    type="button"
+                    className="btn btn-outline"
+                    onClick={() => setRequestModalSkill(null)}
+                  >
+                    Cancel
+                  </button>
+                  <button type="submit" className="btn btn-primary">
+                    <Send size={15} />
+                    <span>Send Learning Request</span>
+                  </button>
+                </div>
+              </form>
+            </div>
+          </div>,
+          document.body
+        )}
     </div>
   );
 };

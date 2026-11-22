@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useMemo } from 'react';
+import { createPortal } from 'react-dom';
 import { Link, useNavigate } from 'react-router-dom';
 import { motion, useReducedMotion } from 'framer-motion';
 import {
@@ -65,6 +66,25 @@ const Sessions = () => {
       })
       .catch(() => {});
   }, [studentId, isScheduleModalOpen]);
+
+  // Lock body scroll and handle Escape key for schedule modal
+  useEffect(() => {
+    if (!isScheduleModalOpen) return;
+    const prevOverflow = document.body.style.overflow;
+    document.body.style.overflow = 'hidden';
+
+    const handleKeyDown = (e) => {
+      if (e.key === 'Escape') {
+        setIsScheduleModalOpen(false);
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+
+    return () => {
+      document.body.style.overflow = prevOverflow;
+      window.removeEventListener('keydown', handleKeyDown);
+    };
+  }, [isScheduleModalOpen]);
 
   // Polling every 10s and on window focus
   useEffect(() => {
@@ -823,26 +843,37 @@ const Sessions = () => {
         )}
 
         {/* Modal: Schedule a Session */}
-        {isScheduleModalOpen && (
-          <div className="modal-overlay">
-            <div className="modal-dialog">
-              <div className="modal-header">
-                <div>
-                  <h3 className="font-bold text-lg">Schedule a Peer Session</h3>
-                  <p className="text-xs text-muted">
-                    Set up a 1-on-1 teaching or learning exchange with a fellow student.
-                  </p>
+        {isScheduleModalOpen &&
+          createPortal(
+            <div className="modal-overlay" onClick={() => setIsScheduleModalOpen(false)}>
+              <div
+                className="modal-dialog"
+                style={{
+                  maxHeight: 'calc(100vh - 2rem)',
+                  maxHeight: 'calc(100dvh - 2rem)',
+                  display: 'flex',
+                  flexDirection: 'column',
+                  overflow: 'hidden'
+                }}
+                onClick={(e) => e.stopPropagation()}
+              >
+                <div className="modal-header" style={{ flexShrink: 0 }}>
+                  <div>
+                    <h3 className="font-bold text-lg">Schedule a Peer Session</h3>
+                    <p className="text-xs text-muted">
+                      Set up a 1-on-1 teaching or learning exchange with a fellow student.
+                    </p>
+                  </div>
+                  <button
+                    className="modal-close-btn"
+                    onClick={() => setIsScheduleModalOpen(false)}
+                  >
+                    <X size={20} />
+                  </button>
                 </div>
-                <button
-                  className="modal-close-btn"
-                  onClick={() => setIsScheduleModalOpen(false)}
-                >
-                  <X size={20} />
-                </button>
-              </div>
 
-              <form onSubmit={handleScheduleSubmit}>
-                <div className="modal-body">
+                <form onSubmit={handleScheduleSubmit} style={{ display: 'flex', flexDirection: 'column', flex: 1, minHeight: 0, overflow: 'hidden' }}>
+                  <div className="modal-body" style={{ flex: 1, overflowY: 'auto', minHeight: 0 }}>
                   {/* Select from Accepted Requests if available */}
                   {acceptedExchanges.length > 0 && (
                     <div className="form-group mb-4">
@@ -1132,7 +1163,7 @@ const Sessions = () => {
                   </div>
                 </div>
 
-                <div className="modal-footer">
+                <div className="modal-footer" style={{ flexShrink: 0 }}>
                   <button
                     type="button"
                     className="btn btn-outline"
@@ -1147,7 +1178,8 @@ const Sessions = () => {
                 </div>
               </form>
             </div>
-          </div>
+          </div>,
+          document.body
         )}
 
         {/* Modal: Confirm Session Cancellation */}

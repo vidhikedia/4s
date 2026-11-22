@@ -1,4 +1,5 @@
 import React, { useState, useEffect } from 'react';
+import { createPortal } from 'react-dom';
 import { Link } from 'react-router-dom';
 import {
   BookOpen,
@@ -42,6 +43,24 @@ const MySkills = () => {
       setToastMessage(null);
     }, 4500);
   };
+
+  useEffect(() => {
+    if (!modalOpen) return;
+    const prevOverflow = document.body.style.overflow;
+    document.body.style.overflow = 'hidden';
+
+    const handleKeyDown = (e) => {
+      if (e.key === 'Escape') {
+        setModalOpen(false);
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+
+    return () => {
+      document.body.style.overflow = prevOverflow;
+      window.removeEventListener('keydown', handleKeyDown);
+    };
+  }, [modalOpen]);
 
   const fetchSkills = async () => {
     const studentId = user?.id || user?.StudentID || user?.studentId;
@@ -434,159 +453,173 @@ const MySkills = () => {
       {/* ------------------------------------------------------------------
           Add / Edit Skill Modal
           ------------------------------------------------------------------ */}
-      {modalOpen && (
-        <div className="modal-overlay" onClick={() => setModalOpen(false)}>
-          <div className="modal-card" style={{ maxWidth: '580px' }} onClick={(e) => e.stopPropagation()}>
-            <form onSubmit={handleSubmit}>
-              <div className="modal-header">
-                <h3>{editingSkill ? 'Edit Teaching Skill' : 'Offer a New Skill'}</h3>
-                <button
-                  type="button"
-                  className="modal-close-btn"
-                  onClick={() => setModalOpen(false)}
-                  aria-label="Close modal"
-                >
-                  <X size={20} />
-                </button>
-              </div>
-
-              <div className="modal-body">
-                {/* Skill Name */}
-                <div className="form-group">
-                  <label className="form-label" htmlFor="skill-name">
-                    Skill Name
-                  </label>
-                  <input
-                    id="skill-name"
-                    type="text"
-                    className={`form-input ${formErrors.name ? 'input-error' : ''}`}
-                    placeholder="e.g. C Programming, React & Tailwind, Figma UI Design"
-                    value={formData.name}
-                    onChange={(e) => {
-                      setFormData({ ...formData, name: e.target.value });
-                      if (formErrors.name) setFormErrors({ ...formErrors, name: null });
-                    }}
-                  />
-                  {formErrors.name && <span className="form-error-msg">{formErrors.name}</span>}
-
-                  {/* ID Relationship & Auto-Resolution Preview */}
-                  <div className="p-3 bg-slate-50 border border-slate-200 rounded-lg text-xs space-y-1.5 my-3">
-                    <div className="flex items-center justify-between">
-                      <span className="font-semibold text-slate-700">Course Identifier (Shared):</span>
-                      <span className="font-mono font-bold text-emerald-700 bg-emerald-50 px-2 py-0.5 rounded border border-emerald-200">
-                        {formData.name.trim() ? resolveOrAddCourse(formData.name, formData.category) : (editingSkill?.courseId || 'CRS001')}
-                      </span>
-                    </div>
-                    <p className="text-slate-500 text-[11px] leading-tight">
-                      Shared Course ID used across all students teaching or requesting this skill. Students connect through this shared Course ID.
-                    </p>
-                    <div className="flex items-center justify-between pt-1 border-t border-slate-200">
-                      <span className="font-semibold text-slate-700">Teaching Record ID:</span>
-                      <span className="font-mono font-bold text-indigo-700 bg-indigo-50 px-2 py-0.5 rounded border border-indigo-200">
-                        {editingSkill ? editingSkill.teachingId : 'Auto-generated upon save (e.g. TCH...)'}
-                      </span>
-                    </div>
-                  </div>
+      {modalOpen &&
+        createPortal(
+          <div className="modal-overlay" onClick={() => setModalOpen(false)}>
+            <div
+              className="modal-card"
+              style={{
+                maxWidth: '580px',
+                width: '100%',
+                maxHeight: 'calc(100vh - 2rem)',
+                maxHeight: 'calc(100dvh - 2rem)',
+                display: 'flex',
+                flexDirection: 'column',
+                overflow: 'hidden'
+              }}
+              onClick={(e) => e.stopPropagation()}
+            >
+              <form onSubmit={handleSubmit} style={{ display: 'flex', flexDirection: 'column', flex: 1, minHeight: 0, overflow: 'hidden' }}>
+                <div className="modal-header" style={{ flexShrink: 0 }}>
+                  <h3>{editingSkill ? 'Edit Teaching Skill' : 'Offer a New Skill'}</h3>
+                  <button
+                    type="button"
+                    className="modal-close-btn"
+                    onClick={() => setModalOpen(false)}
+                    aria-label="Close modal"
+                  >
+                    <X size={20} />
+                  </button>
                 </div>
 
-                {/* Category & Proficiency Level (Grid) */}
-                <div className="modal-form-grid">
+                <div className="modal-body" style={{ flex: 1, overflowY: 'auto', minHeight: 0 }}>
+                  {/* Skill Name */}
                   <div className="form-group">
-                    <label className="form-label" htmlFor="skill-category">
-                      Category
+                    <label className="form-label" htmlFor="skill-name">
+                      Skill Name
                     </label>
-                    <select
-                      id="skill-category"
-                      className="form-input"
-                      value={formData.category}
-                      onChange={(e) => setFormData({ ...formData, category: e.target.value })}
-                    >
-                      {selectableCategories.map((c) => (
-                        <option key={c} value={c}>
-                          {c}
-                        </option>
-                      ))}
-                    </select>
+                    <input
+                      id="skill-name"
+                      type="text"
+                      className={`form-input ${formErrors.name ? 'input-error' : ''}`}
+                      placeholder="e.g. C Programming, React & Tailwind, Figma UI Design"
+                      value={formData.name}
+                      onChange={(e) => {
+                        setFormData({ ...formData, name: e.target.value });
+                        if (formErrors.name) setFormErrors({ ...formErrors, name: null });
+                      }}
+                    />
+                    {formErrors.name && <span className="form-error-msg">{formErrors.name}</span>}
+
+                    {/* ID Relationship & Auto-Resolution Preview */}
+                    <div className="p-3 bg-slate-50 border border-slate-200 rounded-lg text-xs space-y-1.5 my-3">
+                      <div className="flex items-center justify-between">
+                        <span className="font-semibold text-slate-700">Course Identifier (Shared):</span>
+                        <span className="font-mono font-bold text-emerald-700 bg-emerald-50 px-2 py-0.5 rounded border border-emerald-200">
+                          {formData.name.trim() ? resolveOrAddCourse(formData.name, formData.category) : (editingSkill?.courseId || 'CRS001')}
+                        </span>
+                      </div>
+                      <p className="text-slate-500 text-[11px] leading-tight">
+                        Shared Course ID used across all students teaching or requesting this skill. Students connect through this shared Course ID.
+                      </p>
+                      <div className="flex items-center justify-between pt-1 border-t border-slate-200">
+                        <span className="font-semibold text-slate-700">Teaching Record ID:</span>
+                        <span className="font-mono font-bold text-indigo-700 bg-indigo-50 px-2 py-0.5 rounded border border-indigo-200">
+                          {editingSkill ? editingSkill.teachingId : 'Auto-generated upon save (e.g. TCH...)'}
+                        </span>
+                      </div>
+                    </div>
                   </div>
 
+                  {/* Category & Proficiency Level (Grid) */}
+                  <div className="modal-form-grid">
+                    <div className="form-group">
+                      <label className="form-label" htmlFor="skill-category">
+                        Category
+                      </label>
+                      <select
+                        id="skill-category"
+                        className="form-input"
+                        value={formData.category}
+                        onChange={(e) => setFormData({ ...formData, category: e.target.value })}
+                      >
+                        {selectableCategories.map((c) => (
+                          <option key={c} value={c}>
+                            {c}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+
+                    <div className="form-group">
+                      <label className="form-label" htmlFor="skill-level">
+                        Proficiency Level
+                      </label>
+                      <select
+                        id="skill-level"
+                        className="form-input"
+                        value={formData.level}
+                        onChange={(e) => setFormData({ ...formData, level: e.target.value })}
+                      >
+                        {SKILL_LEVELS.filter((l) => l !== 'All').map((l) => (
+                          <option key={l} value={l}>
+                            {l}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+                  </div>
+
+                  {/* Description */}
                   <div className="form-group">
-                    <label className="form-label" htmlFor="skill-level">
-                      Proficiency Level
+                    <label className="form-label" htmlFor="skill-desc">
+                      Description & Topics You Can Teach
                     </label>
-                    <select
-                      id="skill-level"
-                      className="form-input"
-                      value={formData.level}
-                      onChange={(e) => setFormData({ ...formData, level: e.target.value })}
-                    >
-                      {SKILL_LEVELS.filter((l) => l !== 'All').map((l) => (
-                        <option key={l} value={l}>
-                          {l}
-                        </option>
-                      ))}
-                    </select>
+                    <textarea
+                      id="skill-desc"
+                      rows={4}
+                      className={`form-input ${formErrors.description ? 'input-error' : ''}`}
+                      placeholder="Explain what specific topics, coursework questions, or project skills you can help peer learners with..."
+                      value={formData.description}
+                      onChange={(e) => {
+                        setFormData({ ...formData, description: e.target.value });
+                        if (formErrors.description) setFormErrors({ ...formErrors, description: null });
+                      }}
+                    />
+                    {formErrors.description && (
+                      <span className="form-error-msg">{formErrors.description}</span>
+                    )}
+                  </div>
+
+                  {/* Availability */}
+                  <div className="form-group">
+                    <label className="form-label" htmlFor="skill-availability">
+                      Your Weekly Timetable Availability
+                    </label>
+                    <input
+                      id="skill-availability"
+                      type="text"
+                      className={`form-input ${formErrors.availability ? 'input-error' : ''}`}
+                      placeholder="e.g. Weekdays after 4 PM, Weekends, Mon & Wed evenings"
+                      value={formData.availability}
+                      onChange={(e) => {
+                        setFormData({ ...formData, availability: e.target.value });
+                        if (formErrors.availability) setFormErrors({ ...formErrors, availability: null });
+                      }}
+                    />
+                    {formErrors.availability && (
+                      <span className="form-error-msg">{formErrors.availability}</span>
+                    )}
                   </div>
                 </div>
 
-                {/* Description */}
-                <div className="form-group">
-                  <label className="form-label" htmlFor="skill-desc">
-                    Description & Topics You Can Teach
-                  </label>
-                  <textarea
-                    id="skill-desc"
-                    rows={4}
-                    className={`form-input ${formErrors.description ? 'input-error' : ''}`}
-                    placeholder="Explain what specific topics, coursework questions, or project skills you can help peer learners with..."
-                    value={formData.description}
-                    onChange={(e) => {
-                      setFormData({ ...formData, description: e.target.value });
-                      if (formErrors.description) setFormErrors({ ...formErrors, description: null });
-                    }}
-                  />
-                  {formErrors.description && (
-                    <span className="form-error-msg">{formErrors.description}</span>
-                  )}
+                <div className="modal-footer" style={{ flexShrink: 0 }}>
+                  <button
+                    type="button"
+                    className="btn btn-outline"
+                    onClick={() => setModalOpen(false)}
+                  >
+                    Cancel
+                  </button>
+                  <button type="submit" className="btn btn-primary">
+                    {editingSkill ? 'Save Changes' : 'Add Skill'}
+                  </button>
                 </div>
-
-                {/* Availability */}
-                <div className="form-group">
-                  <label className="form-label" htmlFor="skill-availability">
-                    Your Weekly Timetable Availability
-                  </label>
-                  <input
-                    id="skill-availability"
-                    type="text"
-                    className={`form-input ${formErrors.availability ? 'input-error' : ''}`}
-                    placeholder="e.g. Weekdays after 4 PM, Weekends, Mon & Wed evenings"
-                    value={formData.availability}
-                    onChange={(e) => {
-                      setFormData({ ...formData, availability: e.target.value });
-                      if (formErrors.availability) setFormErrors({ ...formErrors, availability: null });
-                    }}
-                  />
-                  {formErrors.availability && (
-                    <span className="form-error-msg">{formErrors.availability}</span>
-                  )}
-                </div>
-              </div>
-
-              <div className="modal-footer">
-                <button
-                  type="button"
-                  className="btn btn-outline"
-                  onClick={() => setModalOpen(false)}
-                >
-                  Cancel
-                </button>
-                <button type="submit" className="btn btn-primary">
-                  {editingSkill ? 'Save Changes' : 'Add Skill'}
-                </button>
-              </div>
-            </form>
-          </div>
-        </div>
-      )}
+              </form>
+            </div>
+          </div>,
+          document.body
+        )}
 
       {/* ------------------------------------------------------------------
           Delete Confirmation Dialog

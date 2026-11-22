@@ -323,6 +323,41 @@ function mapSession(row, viewerId) {
   };
 }
 
+function isFutureSession(row, now = new Date()) {
+  if (row.Status !== 'Scheduled') return false;
+  if (!row.SessionDate) return false;
+  const dateStr = String(row.SessionDate).trim();
+  const timeStr = String(row.StartTime || '').trim();
+
+  let hours = 23;
+  let minutes = 59;
+  let seconds = 59;
+
+  if (timeStr) {
+    const match24 = timeStr.match(/^(\d{1,2}):(\d{2})(?::(\d{2}))?$/);
+    if (match24) {
+      hours = parseInt(match24[1], 10);
+      minutes = parseInt(match24[2], 10);
+      seconds = match24[3] ? parseInt(match24[3], 10) : 0;
+    } else {
+      const match12 = timeStr.match(/^(\d{1,2}):(\d{2})\s*(AM|PM)$/i);
+      if (match12) {
+        hours = parseInt(match12[1], 10);
+        minutes = parseInt(match12[2], 10);
+        seconds = 0;
+        const ampm = match12[3].toUpperCase();
+        if (ampm === 'PM' && hours < 12) hours += 12;
+        if (ampm === 'AM' && hours === 12) hours = 0;
+      }
+    }
+  }
+
+  const parts = dateStr.split('-').map(Number);
+  if (parts.length !== 3 || parts.some(isNaN)) return false;
+  const sessionDateTime = new Date(parts[0], parts[1] - 1, parts[2], hours, minutes, seconds);
+  return sessionDateTime.getTime() > now.getTime();
+}
+
 function offeredRows(studentId) {
   return db.prepare(
     `SELECT sk.SkillID, sk.SkillName, sk.Category, so.ProficiencyLevel AS Level,
@@ -760,8 +795,9 @@ function hydrateStudent(id) {
   const counts = sessionCounts(id);
   const offered = offeredRows(id).map((r) => mapOffered(r, id));
   const wanted = wantedRows(id).map((r) => mapWanted(r, id));
-  const sessions = db.prepare(`${SESSION_SELECT} WHERE e.TeacherID = ? OR e.LearnerID = ? ORDER BY s.SessionDate ASC`)
-    .all(id, id).map((row) => mapSession(row, id));
+  const allSessions = db.prepare(`${SESSION_SELECT} WHERE e.TeacherID = ? OR e.LearnerID = ? ORDER BY s.SessionDate ASC`)
+    .all(id, id);
+  const upcomingSessions = allSessions.filter((row) => isFutureSession(row)).map((row) => mapSession(row, id));
   const availability = getAvailability(id);
   const reviews = listFeedbackForStudent(id).map((row) => mapReview(row, id));
   const power = computePowerLevel(id, counts.sessionsTaught, counts.sessionsAttended, offered.length);
@@ -796,7 +832,7 @@ function hydrateStudent(id) {
     wanted,
     skillsOffered: offered,
     skillsWanted: wanted,
-    upcomingSessions: sessions,
+    upcomingSessions,
     weeklyAvailability: availability,
     recentReviews: reviews,
     achievements,
@@ -1255,7 +1291,43 @@ route('PATCH', '/api/students/:id/offered/:skillId', (req, body, p) => {
 route('DELETE', '/api/students/:id/offered/:skillId', (req, body, p) => {
   const targetId = Number(p.id);
   if (!req.user || req.user.studentId !== targetId) throw new HttpError(403, 'Forbidden');
-  const r = db.prepare('DELETE FROM SKILL_OFFERED WHERE StudentID = ? AND SkillID = ?').run(targetId, p.skillId);
+  const skillId = Number(p.skillId);
+  const cur = db.prepare('SELECT * FROM SKILL_OFFERED WHERE StudentID = ? AND SkillID = ?').get(targetId, skillId);
+  if (!cur) throw notFound('Entry not found');
+
+  const acceptedExchanges = db.prepare(
+    "SELECT ExchangeID FROM EXCHANGE WHERE (TeacherID = ? OR LearnerID = ?) AND SkillID = ? AND Status = 'Accepted'"
+  ).all(targetId, targetId, skillId);
+  for (const ex of acceptedExchanges) {
+    const sessions = db.prepare("SELECT * FROM SESSION WHERE ExchangeID = ? AND Status = 'Scheduled'").all(ex.ExchangeID);
+    if (sessions.some((s) => isFutureSession(s))) {
+      throw new HttpError(409, 'You have upcoming sessions for this skill. Cancel them in Sessions first.');
+    }
+  }
+
+  const deleter = getStudent(targetId);
+  const skillRow = db.prepare('SELECT SkillName FROM SKILL WHERE SkillID = ?').get(skillId);
+  const skillName = skillRow?.SkillName || 'this skill';
+
+  const pendingExchanges = db.prepare(
+    "SELECT * FROM EXCHANGE WHERE TeacherID = ? AND SkillID = ? AND Status = 'Pending'"
+  ).all(targetId, skillId);
+  for (const ex of pendingExchanges) {
+    db.prepare("UPDATE EXCHANGE SET Status = 'Cancelled' WHERE ExchangeID = ?").run(ex.ExchangeID);
+    db.prepare(
+      'INSERT INTO NOTIFICATION (StudentID, Type, Title, Message, Link, RelatedType, RelatedID) VALUES (?, ?, ?, ?, ?, ?, ?)'
+    ).run(
+      ex.LearnerID,
+      'match',
+      'Exchange Cancelled',
+      `${deleter.Name} is no longer offering ${skillName}`,
+      '/matches',
+      'exchange',
+      String(ex.ExchangeID)
+    );
+  }
+
+  const r = db.prepare('DELETE FROM SKILL_OFFERED WHERE StudentID = ? AND SkillID = ?').run(targetId, skillId);
   if (!r.changes) throw notFound('Entry not found');
   return [204];
 });
@@ -1321,7 +1393,43 @@ route('PATCH', '/api/students/:id/wanted/:skillId', (req, body, p) => {
 route('DELETE', '/api/students/:id/wanted/:skillId', (req, body, p) => {
   const targetId = Number(p.id);
   if (!req.user || req.user.studentId !== targetId) throw new HttpError(403, 'Forbidden');
-  const r = db.prepare('DELETE FROM SKILL_WANTED WHERE StudentID = ? AND SkillID = ?').run(targetId, p.skillId);
+  const skillId = Number(p.skillId);
+  const cur = db.prepare('SELECT * FROM SKILL_WANTED WHERE StudentID = ? AND SkillID = ?').get(targetId, skillId);
+  if (!cur) throw notFound('Entry not found');
+
+  const acceptedExchanges = db.prepare(
+    "SELECT ExchangeID FROM EXCHANGE WHERE (TeacherID = ? OR LearnerID = ?) AND SkillID = ? AND Status = 'Accepted'"
+  ).all(targetId, targetId, skillId);
+  for (const ex of acceptedExchanges) {
+    const sessions = db.prepare("SELECT * FROM SESSION WHERE ExchangeID = ? AND Status = 'Scheduled'").all(ex.ExchangeID);
+    if (sessions.some((s) => isFutureSession(s))) {
+      throw new HttpError(409, 'You have upcoming sessions for this skill. Cancel them in Sessions first.');
+    }
+  }
+
+  const deleter = getStudent(targetId);
+  const skillRow = db.prepare('SELECT SkillName FROM SKILL WHERE SkillID = ?').get(skillId);
+  const skillName = skillRow?.SkillName || 'this skill';
+
+  const pendingExchanges = db.prepare(
+    "SELECT * FROM EXCHANGE WHERE LearnerID = ? AND SkillID = ? AND Status = 'Pending'"
+  ).all(targetId, skillId);
+  for (const ex of pendingExchanges) {
+    db.prepare("UPDATE EXCHANGE SET Status = 'Cancelled' WHERE ExchangeID = ?").run(ex.ExchangeID);
+    db.prepare(
+      'INSERT INTO NOTIFICATION (StudentID, Type, Title, Message, Link, RelatedType, RelatedID) VALUES (?, ?, ?, ?, ?, ?, ?)'
+    ).run(
+      ex.TeacherID,
+      'match',
+      'Exchange Cancelled',
+      `${deleter.Name} is no longer requesting ${skillName}`,
+      '/matches',
+      'exchange',
+      String(ex.ExchangeID)
+    );
+  }
+
+  const r = db.prepare('DELETE FROM SKILL_WANTED WHERE StudentID = ? AND SkillID = ?').run(targetId, skillId);
   if (!r.changes) throw notFound('Entry not found');
   return [204];
 });
@@ -2009,8 +2117,11 @@ route('GET', '/api/students/:id/dashboard', (req, body, p) => {
   const targetId = Number(p.id);
   if (!req.user || req.user.studentId !== targetId) throw new HttpError(403, 'Forbidden');
   const student = hydrateStudent(targetId);
-  const sessions = db.prepare(`${SESSION_SELECT} WHERE e.TeacherID = ? OR e.LearnerID = ? ORDER BY s.SessionDate DESC`)
-    .all(targetId, targetId).map((row) => mapSession(row, targetId));
+  const allSessions = db.prepare(`${SESSION_SELECT} WHERE e.TeacherID = ? OR e.LearnerID = ? ORDER BY s.SessionDate ASC`)
+    .all(targetId, targetId);
+  const futureSessions = allSessions
+    .filter((row) => isFutureSession(row))
+    .map((row) => mapSession(row, targetId));
   const matches = db.prepare(
     `SELECT COUNT(*) AS n FROM SKILL_WANTED mw
      JOIN SKILL_OFFERED so ON so.SkillID = mw.SkillID
@@ -2026,7 +2137,7 @@ route('GET', '/api/students/:id/dashboard', (req, body, p) => {
     stats: {
       skillsOffered: student.skillsOffered.length,
       skillsWanted: student.skillsWanted.length,
-      upcomingSessions: sessions.filter((s) => s.status === 'Upcoming').length,
+      upcomingSessions: futureSessions.length,
       matches,
       sessionsTaught: student.sessionsTaught,
       sessionsAttended: student.sessionsAttended,
@@ -2034,7 +2145,7 @@ route('GET', '/api/students/:id/dashboard', (req, body, p) => {
       powerLevel: student.powerLevel,
       rank: student.rank,
     },
-    upcomingSessions: sessions,
+    upcomingSessions: futureSessions,
     recentMessages: convos.slice(0, 5).map((c) => ({
       id: c.id,
       sender: c.peerName,

@@ -65,12 +65,12 @@ const Dashboard = () => {
 
   // Filter actual upcoming study sessions (exclude past/cancelled)
   const upcomingList = useMemo(() => {
-    const all = dashboardData?.sessions || user.upcomingSessions || [];
+    const all = dashboardData?.upcomingSessions || user.upcomingSessions || dashboardData?.sessions || [];
     const upcomingOnly = all.filter(
-      (s) => s.status === 'Upcoming' || s.status === 'Scheduled' || (!s.status && s.date >= '2026-10-01')
+      (s) => s.status === 'Upcoming' || s.status === 'Scheduled'
     );
-    return upcomingOnly.length > 0 ? upcomingOnly.slice(0, 3) : all.slice(0, 2);
-  }, [dashboardData?.sessions, user.upcomingSessions]);
+    return upcomingOnly.slice(0, 3);
+  }, [dashboardData?.upcomingSessions, dashboardData?.sessions, user.upcomingSessions]);
 
   return (
     <div className="dashboard-page">

@@ -860,6 +860,283 @@ function check(name, cond, extra = '') {
   const yInXAfter = xConvAfterRead.data.find((c) => Number(c.peerId) === userYId);
   check('User X unread count becomes 0 after marking read', yInXAfter && yInXAfter.unreadCount === 0);
 
+  // =========================================================================
+  // CHANGE 3 & CHANGE 4 TESTS: 3 BRAND-NEW ACCOUNT PAIRS
+  // =========================================================================
+  console.log('\n--- CHANGE 3 & 4: 3 Brand-New Account Pairs Tests ---');
+
+  // PAIR 1: Alice (Teacher) & Bob (Learner)
+  // Test: Deleting offered skill sets Pending exchange to Cancelled and notifies Bob
+  const p1AliceReg = await call('POST', '/api/register', {
+    name: 'Alice Springs',
+    email: `alice.springs_${Date.now()}@campus.edu`,
+    password: 'password123',
+    department: 'Computer Science',
+    year: '3rd Year'
+  }, { Authorization: '' });
+  check('[Pair 1] Alice registered', p1AliceReg.status === 201);
+  const p1AliceId = p1AliceReg.data.StudentID;
+  const p1AliceToken = p1AliceReg.data.token;
+
+  const p1BobReg = await call('POST', '/api/register', {
+    name: 'Bob Miller',
+    email: `bob.miller_${Date.now()}@campus.edu`,
+    password: 'password123',
+    department: 'Software Engineering',
+    year: '2nd Year'
+  }, { Authorization: '' });
+  check('[Pair 1] Bob registered', p1BobReg.status === 201);
+  const p1BobId = p1BobReg.data.StudentID;
+  const p1BobToken = p1BobReg.data.token;
+
+  // Alice offers Rust Systems Programming
+  const p1Offer = await call('POST', `/api/students/${p1AliceId}/offered`, {
+    skillName: 'Rust Systems Programming',
+    category: 'Computer Science',
+    level: 'Advanced',
+    description: 'Concurrency and memory safety with Rust',
+    availability: 'Weekdays 5 PM'
+  }, { Authorization: `Bearer ${p1AliceToken}` });
+  check('[Pair 1] Alice offered Rust Systems Programming', p1Offer.status === 201);
+  const p1SkillId = p1Offer.data.SkillID;
+
+  // Bob requests an exchange with Alice
+  const p1ExReq = await call('POST', '/api/exchanges', {
+    teacherId: p1AliceId,
+    learnerId: p1BobId,
+    skillId: p1SkillId,
+    note: 'Would love to learn memory safety with Rust'
+  }, { Authorization: `Bearer ${p1BobToken}` });
+  check('[Pair 1] Bob requested exchange (Pending)', p1ExReq.status === 201 && p1ExReq.data.Status === 'Pending');
+  const p1ExId = p1ExReq.data.ExchangeID;
+
+  // Alice deletes her offered skill
+  const p1DelRes = await call('DELETE', `/api/students/${p1AliceId}/offered/${p1SkillId}`, null, {
+    Authorization: `Bearer ${p1AliceToken}`
+  });
+  check('[Pair 1] Alice deleted skill -> 204', p1DelRes.status === 204);
+
+  // Assert 1: Pending exchange is set to Cancelled
+  const p1ExCheck = db.prepare('SELECT Status FROM EXCHANGE WHERE ExchangeID = ?').get(p1ExId);
+  check('[Pair 1] Pending exchange set to Cancelled on skill delete', p1ExCheck?.Status === 'Cancelled');
+
+  // Assert 2: Bob receives notification
+  const p1BobNotifs = await call('GET', `/api/students/${p1BobId}/notifications`, null, {
+    Authorization: `Bearer ${p1BobToken}`
+  });
+  const bobNotif = p1BobNotifs.data?.find((n) => n.RelatedID === String(p1ExId) || (n.Message && n.Message.includes('Rust Systems Programming')));
+  check('[Pair 1] Bob received cancellation notification', !!bobNotif && bobNotif.Message.includes('is no longer offering Rust Systems Programming'));
+
+
+  // PAIR 2: Charlie (Teacher) & Dana (Learner)
+  // Test: Deleting blocked with 409 while session is scheduled; allowed after session is cancelled
+  const p2CharlieReg = await call('POST', '/api/register', {
+    name: 'Charlie Davis',
+    email: `charlie.davis_${Date.now()}@campus.edu`,
+    password: 'password123',
+    department: 'Data Science',
+    year: '4th Year'
+  }, { Authorization: '' });
+  check('[Pair 2] Charlie registered', p2CharlieReg.status === 201);
+  const p2CharlieId = p2CharlieReg.data.StudentID;
+  const p2CharlieToken = p2CharlieReg.data.token;
+
+  const p2DanaReg = await call('POST', '/api/register', {
+    name: 'Dana White',
+    email: `dana.white_${Date.now()}@campus.edu`,
+    password: 'password123',
+    department: 'Information Technology',
+    year: '1st Year'
+  }, { Authorization: '' });
+  check('[Pair 2] Dana registered', p2DanaReg.status === 201);
+  const p2DanaId = p2DanaReg.data.StudentID;
+  const p2DanaToken = p2DanaReg.data.token;
+
+  // Charlie offers GraphQL API Design
+  const p2Offer = await call('POST', `/api/students/${p2CharlieId}/offered`, {
+    skillName: 'GraphQL API Design',
+    category: 'Web Development',
+    level: 'Intermediate',
+    description: 'Schemas, resolvers and Apollo Client'
+  }, { Authorization: `Bearer ${p2CharlieToken}` });
+  check('[Pair 2] Charlie offered GraphQL API Design', p2Offer.status === 201);
+  const p2SkillId = p2Offer.data.SkillID;
+
+  // Dana requests exchange
+  const p2ExReq = await call('POST', '/api/exchanges', {
+    teacherId: p2CharlieId,
+    learnerId: p2DanaId,
+    skillId: p2SkillId,
+    note: 'Want to learn GraphQL schemas'
+  }, { Authorization: `Bearer ${p2DanaToken}` });
+  check('[Pair 2] Dana requested exchange', p2ExReq.status === 201);
+  const p2ExId = p2ExReq.data.ExchangeID;
+
+  // Charlie accepts exchange
+  const p2Accept = await call('PATCH', `/api/exchanges/${p2ExId}/status`, { status: 'Accepted' }, {
+    Authorization: `Bearer ${p2CharlieToken}`
+  });
+  check('[Pair 2] Charlie accepted exchange', p2Accept.status === 200 && p2Accept.data.Status === 'Accepted');
+
+  // Charlie schedules a future session
+  const p2Sess = await call('POST', '/api/sessions', {
+    teacherId: p2CharlieId,
+    learnerId: p2DanaId,
+    skillId: p2SkillId,
+    sessionDate: '2026-11-28',
+    startTime: '15:00',
+    durationMins: 60,
+    topic: 'GraphQL Schema Design',
+    mode: 'Online'
+  }, { Authorization: `Bearer ${p2CharlieToken}` });
+  check('[Pair 2] Session scheduled for future date', p2Sess.status === 201);
+  const p2SessionId = p2Sess.data.SessionID || Number(String(p2Sess.data.id).replace(/\D/g, ''));
+
+  // Charlie attempts to delete the offered skill -> must be BLOCKED with 409
+  const p2BlockDel = await call('DELETE', `/api/students/${p2CharlieId}/offered/${p2SkillId}`, null, {
+    Authorization: `Bearer ${p2CharlieToken}`
+  });
+  check('[Pair 2] Delete blocked with 409 while session scheduled', p2BlockDel.status === 409);
+  check('[Pair 2] Correct error message returned', p2BlockDel.data?.error === 'You have upcoming sessions for this skill. Cancel them in Sessions first.' || p2BlockDel.data?.message === 'You have upcoming sessions for this skill. Cancel them in Sessions first.');
+
+  // Dana cancels the scheduled session
+  const p2CancelSess = await call('PATCH', `/api/sessions/${p2SessionId}`, {
+    status: 'Cancelled',
+    reason: 'Rescheduling for next month'
+  }, { Authorization: `Bearer ${p2DanaToken}` });
+  check('[Pair 2] Session cancelled -> 200', p2CancelSess.status === 200);
+
+  // Charlie now attempts to delete the offered skill again -> ALLOWED after session cancelled
+  const p2AllowedDel = await call('DELETE', `/api/students/${p2CharlieId}/offered/${p2SkillId}`, null, {
+    Authorization: `Bearer ${p2CharlieToken}`
+  });
+  check('[Pair 2] Allowed after session is cancelled -> 204', p2AllowedDel.status === 204);
+
+
+  // PAIR 3: Elena (Teacher) & Frank (Learner)
+  // Test: Dashboard never lists cancelled or past-due sessions as upcoming;
+  //       Learner deleting wanted skill cancels pending exchange & notifies teacher.
+  const p3ElenaReg = await call('POST', '/api/register', {
+    name: 'Elena Rostova',
+    email: `elena.rostova_${Date.now()}@campus.edu`,
+    password: 'password123',
+    department: 'Cloud Computing',
+    year: '3rd Year'
+  }, { Authorization: '' });
+  check('[Pair 3] Elena registered', p3ElenaReg.status === 201);
+  const p3ElenaId = p3ElenaReg.data.StudentID;
+  const p3ElenaToken = p3ElenaReg.data.token;
+
+  const p3FrankReg = await call('POST', '/api/register', {
+    name: 'Frank Ocean',
+    email: `frank.ocean_${Date.now()}@campus.edu`,
+    password: 'password123',
+    department: 'Computer Science',
+    year: '2nd Year'
+  }, { Authorization: '' });
+  check('[Pair 3] Frank registered', p3FrankReg.status === 201);
+  const p3FrankId = p3FrankReg.data.StudentID;
+  const p3FrankToken = p3FrankReg.data.token;
+
+  // Elena offers Kubernetes
+  const p3Offer = await call('POST', `/api/students/${p3ElenaId}/offered`, {
+    skillName: 'Kubernetes Pod Networking',
+    category: 'Cloud Computing',
+    level: 'Advanced',
+    description: 'CNI plugins and ingress controllers'
+  }, { Authorization: `Bearer ${p3ElenaToken}` });
+  check('[Pair 3] Elena offered Kubernetes', p3Offer.status === 201);
+  const p3SkillId = p3Offer.data.SkillID;
+
+  // Frank requests exchange & Elena accepts
+  const p3ExReq = await call('POST', '/api/exchanges', {
+    teacherId: p3ElenaId,
+    learnerId: p3FrankId,
+    skillId: p3SkillId
+  }, { Authorization: `Bearer ${p3FrankToken}` });
+  const p3ExId = p3ExReq.data.ExchangeID;
+  await call('PATCH', `/api/exchanges/${p3ExId}/status`, { status: 'Accepted' }, { Authorization: `Bearer ${p3ElenaToken}` });
+
+  // 1. Future scheduled session (date in future e.g. 2026-11-29)
+  const p3FutureSess = await call('POST', '/api/sessions', {
+    teacherId: p3ElenaId,
+    learnerId: p3FrankId,
+    skillId: p3SkillId,
+    sessionDate: '2026-11-29',
+    startTime: '14:00',
+    topic: 'Future Kubernetes Session'
+  }, { Authorization: `Bearer ${p3ElenaToken}` });
+  check('[Pair 3] Future session created', p3FutureSess.status === 201);
+
+  // 2. Cancelled session (scheduled then cancelled)
+  const p3CancelSessReq = await call('POST', '/api/sessions', {
+    teacherId: p3ElenaId,
+    learnerId: p3FrankId,
+    skillId: p3SkillId,
+    sessionDate: '2026-11-30',
+    startTime: '16:00',
+    topic: 'Cancelled Session'
+  }, { Authorization: `Bearer ${p3ElenaToken}` });
+  const p3CancelSessId = p3CancelSessReq.data.SessionID || Number(String(p3CancelSessReq.data.id).replace(/\D/g, ''));
+  await call('PATCH', `/api/sessions/${p3CancelSessId}`, { status: 'Cancelled' }, { Authorization: `Bearer ${p3ElenaToken}` });
+
+  // 3. Past session (date in past e.g. 2026-10-10) inserted via database helper
+  db.prepare(
+    `INSERT INTO SESSION (ExchangeID, SessionDate, StartTime, DurationMins, Topic, Mode, Location, Status)
+     VALUES (?, '2026-10-10', '10:00', 60, 'Past Due Session', 'Offline', 'Library', 'Scheduled')`
+  ).run(p3ExId);
+
+  // Query Elena's dashboard
+  const p3Dash = await call('GET', `/api/students/${p3ElenaId}/dashboard`, null, {
+    Authorization: `Bearer ${p3ElenaToken}`
+  });
+  check('[Pair 3] Elena dashboard loaded -> 200', p3Dash.status === 200);
+
+  const dashUpcoming = p3Dash.data.upcomingSessions;
+  check('[Pair 3] Dashboard upcoming sessions contains future session', dashUpcoming.some((s) => s.topic === 'Future Kubernetes Session'));
+  check('[Pair 3] Dashboard upcoming sessions NEVER contains cancelled session', !dashUpcoming.some((s) => s.topic === 'Cancelled Session' || s.status === 'Cancelled'));
+  check('[Pair 3] Dashboard upcoming sessions NEVER contains past-due session', !dashUpcoming.some((s) => s.topic === 'Past Due Session' || s.date < '2026-11-01'));
+  check('[Pair 3] Dashboard stats.upcomingSessions only counts future scheduled', p3Dash.data.stats.upcomingSessions === 1);
+
+  // Frank tests deleting a wanted skill while an exchange is pending
+  const p3FrankWant = await call('POST', `/api/students/${p3FrankId}/wanted`, {
+    skillName: 'Compiler Optimizations',
+    category: 'Computer Science',
+    level: 'Intermediate'
+  }, { Authorization: `Bearer ${p3FrankToken}` });
+  const p3CompilerSkillId = p3FrankWant.data.SkillID;
+
+  // Elena offers Compiler Optimizations
+  await call('POST', `/api/students/${p3ElenaId}/offered`, {
+    skillName: 'Compiler Optimizations',
+    category: 'Computer Science',
+    level: 'Expert'
+  }, { Authorization: `Bearer ${p3ElenaToken}` });
+
+  // Frank requests exchange with Elena
+  const p3FrankExReq = await call('POST', '/api/exchanges', {
+    teacherId: p3ElenaId,
+    learnerId: p3FrankId,
+    skillId: p3CompilerSkillId
+  }, { Authorization: `Bearer ${p3FrankToken}` });
+  const p3FrankExId = p3FrankExReq.data.ExchangeID;
+
+  // Frank deletes wanted skill
+  const p3DelWantedRes = await call('DELETE', `/api/students/${p3FrankId}/wanted/${p3CompilerSkillId}`, null, {
+    Authorization: `Bearer ${p3FrankToken}`
+  });
+  check('[Pair 3] Frank deleted wanted skill -> 204', p3DelWantedRes.status === 204);
+
+  // Assert pending exchange cancelled & Elena notified
+  const p3ExStatus = db.prepare('SELECT Status FROM EXCHANGE WHERE ExchangeID = ?').get(p3FrankExId);
+  check('[Pair 3] Pending exchange cancelled on wanted skill delete', p3ExStatus?.Status === 'Cancelled');
+
+  const p3ElenaNotifs = await call('GET', `/api/students/${p3ElenaId}/notifications`, null, {
+    Authorization: `Bearer ${p3ElenaToken}`
+  });
+  const elenaNotif = p3ElenaNotifs.data?.find((n) => n.RelatedID === String(p3FrankExId) || (n.Message && n.Message.includes('Compiler Optimizations')));
+  check('[Pair 3] Elena received notification that Frank is no longer requesting skill', !!elenaNotif && elenaNotif.Message.includes('is no longer requesting Compiler Optimizations'));
+
   console.log(`\n${passed} passed, ${failed} failed`);
   if (testServer) {
     testServer.close(() => {
