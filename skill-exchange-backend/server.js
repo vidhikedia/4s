@@ -210,7 +210,8 @@ function resolveSkill(body) {
     if (!sk) throw bad('Referenced student, skill or exchange does not exist');
     return sk;
   }
-  if (body.skillName) return findOrCreateSkill(body.skillName, body.category);
+  const name = body.skillName || body.name || body.skill;
+  if (name) return findOrCreateSkill(name, body.category);
   throw bad('skillId or skillName is required');
 }
 
@@ -354,8 +355,9 @@ function wantedRows(studentId) {
 
 function mapWanted(row, studentId) {
   let status = 'Open';
-  if (row.ExchangeStatus === 'Pending' || row.ExchangeStatus === 'Accepted') status = 'Matched';
-  if (row.ExchangeStatus === 'Completed') status = 'Completed';
+  if (row.ExchangeStatus === 'Accepted') status = 'Matched';
+  else if (row.ExchangeStatus === 'Pending') status = 'Pending';
+  else if (row.ExchangeStatus === 'Completed') status = 'Completed';
   const lrnId = `LRN-${String(row.SkillID).padStart(4, '0')}`;
   const crsId = `CRS${String(row.SkillID).padStart(3, '0')}`;
 

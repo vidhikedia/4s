@@ -448,28 +448,17 @@ const Matches = () => {
     }
 
     setSessionModalPeer(null);
-    showToast(`Request sent to ${bookedMatch.name}. You will be notified when they accept.`);
+    showToast(`Request sent. Awaiting ${bookedMatch.name}'s reply.`);
 
-    // Trigger Real Match Handshake Popup with real learner, teacher, skill and score
+    // Trigger Match Handshake Popup with real learner, teacher, skill and score
     setMatchPopupData({
       teacherName: bookedMatch.name,
       learnerName: (user?.name || 'You').split(' ')[0],
       teacherSkill: bookedMatch.skillOffered,
       learnerSkill: bookedMatch.wantsToLearn || bookedMatch.skillOffered,
-      score: bookedMatch.Match_Score || bookedMatch.score || 94
+      score: bookedMatch.Match_Score || bookedMatch.score || 94,
+      isRequestPending: true
     });
-  };
-
-  const handleAcceptExchange = async (exchangeId) => {
-    const studentId = user?.id || user?.StudentID || user?.studentId;
-    await api.exchanges.updateStatus(exchangeId, 'Accepted', { studentId: normalizeStudentId(studentId) });
-    await fetchMatchesData();
-  };
-
-  const handleRejectExchange = async (exchangeId) => {
-    const studentId = user?.id || user?.StudentID || user?.studentId;
-    await api.exchanges.updateStatus(exchangeId, 'Rejected', { studentId: normalizeStudentId(studentId) });
-    await fetchMatchesData();
   };
 
   const handleResetFilters = () => {
@@ -1009,7 +998,7 @@ const Matches = () => {
                 }}
               >
                 <Calendar size={14} />
-                <span>Schedule Session</span>
+                <span>Request Session</span>
               </button>
             </div>
           </div>
@@ -1096,7 +1085,7 @@ const Matches = () => {
           <div className="modal-card" style={{ maxWidth: '540px' }} onClick={(e) => e.stopPropagation()}>
             <form onSubmit={handleScheduleSubmit}>
               <div className="modal-header">
-                <h3>Request Study Session with {sessionModalPeer.name}</h3>
+                <h3>Request Skill Exchange with {sessionModalPeer.name}</h3>
                 <button
                   type="button"
                   className="modal-close-btn"
@@ -1109,7 +1098,7 @@ const Matches = () => {
               <div className="modal-body">
                 {/* Session Mentor Summary */}
                 <div style={{ backgroundColor: '#f8fafc', padding: '0.875rem 1rem', borderRadius: '0.5rem', border: '1px solid var(--border-color)' }}>
-                  <span className="text-xs text-muted">Matched Peer Mentor:</span>
+                  <span className="text-xs text-muted">Peer Mentor:</span>
                   <h4 className="text-base font-bold text-slate-900">{sessionModalPeer.name}</h4>
                   <div className="flex items-center gap-2 mt-1">
                     <span className="badge-id badge-teaching-id">Teaching ID: {sessionModalPeer.teachingId}</span>
@@ -1198,7 +1187,7 @@ const Matches = () => {
                 </button>
                 <button type="submit" className="btn btn-primary">
                   <Calendar size={15} />
-                  <span>Confirm & Schedule Session</span>
+                  <span>Send Request</span>
                 </button>
               </div>
             </form>
@@ -1217,6 +1206,7 @@ const Matches = () => {
           teacherSkill={matchPopupData.teacherSkill}
           learnerSkill={matchPopupData.learnerSkill}
           score={matchPopupData.score}
+          isRequestPending={matchPopupData.isRequestPending}
         />
       )}
     </div>

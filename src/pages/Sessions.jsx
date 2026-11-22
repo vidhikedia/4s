@@ -202,6 +202,9 @@ const Sessions = () => {
     try {
       await scheduleSession({
         exchangeId: scheduleForm.exchangeId || null,
+        teacherId: scheduleForm.teacherId || null,
+        learnerId: scheduleForm.learnerId || null,
+        skillId: scheduleForm.skillId || null,
         skill: scheduleForm.skill,
         topic: topicTitle,
         userRole: scheduleForm.userRole,
@@ -856,6 +859,9 @@ const Sessions = () => {
                             setScheduleForm((prev) => ({
                               ...prev,
                               exchangeId: ex.ExchangeID || ex.id,
+                              teacherId: ex.TeacherID || ex.teacherId,
+                              learnerId: ex.LearnerID || ex.learnerId,
+                              skillId: ex.SkillID || ex.skillId,
                               userRole: isTeacher ? 'Teacher' : 'Learner',
                               partnerName: partnerName || '',
                               partnerDept: isTeacher ? (ex.LearnerDept || 'Campus Student') : (ex.TeacherDept || 'Campus Student'),

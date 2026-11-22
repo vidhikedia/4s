@@ -359,11 +359,11 @@ const Profile = () => {
                         className="level-tag"
                         style={{
                           backgroundColor:
-                            req.status === 'Matched' ? '#dcfce7' : '#e0f2fe',
-                          color: req.status === 'Matched' ? '#15803d' : '#0369a1'
+                            req.status === 'Matched' || req.status === 'Accepted' ? '#dcfce7' : '#e0f2fe',
+                          color: req.status === 'Matched' || req.status === 'Accepted' ? '#15803d' : '#0369a1'
                         }}
                       >
-                        {req.status}
+                        {req.status === 'Pending' ? 'Awaiting reply' : (req.status || 'Open')}
                       </span>
                     </div>
                     <p className="skill-item-desc">{req.targetGoal}</p>

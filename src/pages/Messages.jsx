@@ -17,7 +17,8 @@ import {
   BookOpen,
   GraduationCap,
   Plus,
-  X
+  X,
+  AlertCircle
 } from 'lucide-react';
 import { useAuth } from '../utils/auth.js';
 import api, { normalizeStudentId } from '../utils/api.js';
@@ -43,6 +44,29 @@ const Messages = () => {
   const [messageInput, setMessageInput] = useState('');
   const [isMobileChatActive, setIsMobileChatActive] = useState(false);
   const [toastMessage, setToastMessage] = useState(null);
+  const [localConversations, setLocalConversations] = useState(null);
+  const [conversationsError, setConversationsError] = useState(null);
+
+  const conversationsList = localConversations !== null ? localConversations : (conversations || []);
+
+  const loadConversations = useCallback(async () => {
+    if (!studentId) return;
+    try {
+      const data = await api.messages.getConversations(studentId);
+      if (Array.isArray(data)) {
+        setLocalConversations(data);
+        setConversationsError(null);
+      }
+      if (refreshConversations) refreshConversations();
+    } catch (err) {
+      console.warn('Failed to load conversations:', err);
+      setConversationsError(err?.message || 'Failed to load conversations');
+    }
+  }, [studentId, refreshConversations]);
+
+  useEffect(() => {
+    loadConversations();
+  }, [loadConversations]);
 
   // New Message Modal State
   const [isNewMessageOpen, setIsNewMessageOpen] = useState(false);
@@ -92,7 +116,7 @@ const Messages = () => {
       const targetPeerId = isIdTarget ? Number(normalizedTarget) : null;
 
       if (targetPeerId && targetPeerId !== Number(studentId)) {
-        const match = (conversations || []).find(
+        const match = (conversationsList || []).find(
           (c) => Number(c.peerId) === targetPeerId
         );
         if (match) {
@@ -102,7 +126,7 @@ const Messages = () => {
           if (studentId) {
             api.messages.markAsRead(studentId, match.peerId)
               .then(() => {
-                if (refreshConversations) refreshConversations();
+                loadConversations();
               })
               .catch(() => {});
           }
@@ -122,13 +146,13 @@ const Messages = () => {
         }
         setIsMobileChatActive(true);
       }
-    } else if ((conversations || []).length > 0 && !activePeerId) {
-      const first = conversations[0];
+    } else if ((conversationsList || []).length > 0 && !activePeerId) {
+      const first = conversationsList[0];
       setActivePeerId(first.peerId);
       setSelectedPeerName(first.peerName);
       fetchThread(first.peerId, true);
     }
-  }, [searchParams, conversations, activePeerId, studentId, fetchThread, refreshConversations]);
+  }, [searchParams, conversationsList, activePeerId, studentId, fetchThread, loadConversations]);
 
   // Polling: refresh the open thread every 3.5 seconds
   useEffect(() => {
@@ -168,7 +192,7 @@ const Messages = () => {
   }, [selectedPeerName]);
 
   // Filter conversations for the sidebar
-  const filteredConversations = (conversations || []).filter((c) => {
+  const filteredConversations = (conversationsList || []).filter((c) => {
     if (!searchQuery.trim()) return true;
     const q = searchQuery.toLowerCase();
     return (
@@ -181,7 +205,7 @@ const Messages = () => {
   // Current active conversation object
   const activeConversation = (currentThread && Number(currentThread.peerId) === Number(activePeerId))
     ? currentThread
-    : (conversations || []).find((c) => Number(c.peerId) === Number(activePeerId))
+    : (conversationsList || []).find((c) => Number(c.peerId) === Number(activePeerId))
     || (selectedPeerName ? {
         id: `conv-${activePeerId}`,
         peerId: Number(activePeerId),
@@ -200,7 +224,7 @@ const Messages = () => {
     if (studentId && peerId) {
       api.messages.markAsRead(studentId, peerId)
         .then(() => {
-          if (refreshConversations) refreshConversations();
+          loadConversations();
         })
         .catch(() => {});
     }
@@ -267,7 +291,7 @@ const Messages = () => {
         body: text,
       });
       await fetchThread(activePeerId, true);
-      if (refreshConversations) refreshConversations();
+      await loadConversations();
       showToast('Message sent.');
     } catch (err) {
       console.error('Failed to send message:', err);
@@ -312,7 +336,7 @@ const Messages = () => {
                     <span>New message</span>
                   </button>
                   <span className="conversations-count-badge">
-                    {(conversations || []).length} Active
+                    {(conversationsList || []).length} Active
                   </span>
                 </div>
               </div>
@@ -330,7 +354,20 @@ const Messages = () => {
             </div>
 
             <div className="conversations-list">
-              {filteredConversations.length === 0 ? (
+              {conversationsError ? (
+                <div className="conv-empty" style={{ padding: '1.5rem 1rem' }}>
+                  <AlertCircle size={28} className="text-red-500 mb-2" />
+                  <p className="font-semibold text-sm text-red-600">Failed to load conversations</p>
+                  <p className="text-xs text-muted mb-3">{conversationsError}</p>
+                  <button
+                    type="button"
+                    className="btn btn-sm btn-outline"
+                    onClick={loadConversations}
+                  >
+                    Retry
+                  </button>
+                </div>
+              ) : filteredConversations.length === 0 ? (
                 <div className="conv-empty">
                   <MessageSquare size={28} className="text-muted mb-2" />
                   <p className="font-semibold text-sm">No conversations found</p>
@@ -417,8 +454,8 @@ const Messages = () => {
               ================================================================ */}
           {activeConversation ? (
             <div
-              className={`chat-room-container ${
-                isMobileChatActive ? 'active-mobile' : ''
+              className={`chat-room ${
+                !isMobileChatActive ? 'hidden-mobile' : ''
               }`}
             >
               {/* Chat Room Header */}
@@ -595,6 +632,12 @@ const Messages = () => {
                   placeholder={`Type a message to ${activeConversation.peerName || 'peer'}... (Press Enter to send)`}
                   value={messageInput}
                   onChange={(e) => setMessageInput(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter' && !e.shiftKey) {
+                      e.preventDefault();
+                      handleSendMessage(e);
+                    }
+                  }}
                   className="chat-input-field"
                   autoFocus
                 />
@@ -609,7 +652,7 @@ const Messages = () => {
               </form>
             </div>
           ) : (
-            <div className="chat-empty-state">
+            <div className={`chat-empty-state ${!isMobileChatActive ? 'hidden-mobile' : ''}`}>
               <div className="chat-empty-icon">
                 <MessageSquare size={32} />
               </div>
@@ -617,6 +660,15 @@ const Messages = () => {
               <p>
                 Choose a student from the sidebar or click "New message" to start exchanging knowledge.
               </p>
+              <button
+                type="button"
+                className="btn btn-primary"
+                style={{ marginTop: '1rem', display: 'inline-flex', alignItems: 'center', gap: '0.4rem' }}
+                onClick={handleOpenNewMessageModal}
+              >
+                <Plus size={16} />
+                <span>New message</span>
+              </button>
             </div>
           )}
         </div>

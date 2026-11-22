@@ -123,7 +123,13 @@ const RequestsPanel = ({ showToast, onRefreshMatches }) => {
   const { incomingRequests, myRequests } = useMemo(() => {
     const incoming = [];
     const my = [];
-    (exchanges || []).forEach((ex) => {
+    const sorted = [...(exchanges || [])].sort((a, b) => {
+      const dateA = new Date(a.RequestDate || a.requestDate || 0).getTime();
+      const dateB = new Date(b.RequestDate || b.requestDate || 0).getTime();
+      if (dateB !== dateA) return dateB - dateA;
+      return Number(b.ExchangeID || b.id || 0) - Number(a.ExchangeID || a.id || 0);
+    });
+    sorted.forEach((ex) => {
       const tId = Number(ex.teacherId ?? ex.TeacherID);
       const lId = Number(ex.learnerId ?? ex.LearnerID);
       const curId = Number(studentId);

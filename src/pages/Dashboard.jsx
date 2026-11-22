@@ -542,7 +542,7 @@ const Dashboard = () => {
             <div className="dash-skills-list">
               {user.skillsWanted && user.skillsWanted.length > 0 ? (
                 user.skillsWanted.map((wish) => {
-                  const isMatched = wish.status === 'Matched' || (wish.learningId && wish.learningId.startsWith('LRN') && wish.learningId.includes('-TCR'));
+                  const isMatched = wish.status === 'Accepted' || wish.status === 'Matched';
                   const teacherName = wish.teacherName || wish.TeacherName || (wish.teacherStudentId === 'STU010' ? 'Kavita Joshi' : wish.teacherStudentId === 'STU004' ? 'Devansh Parekh' : wish.teacherStudentId === 'STU007' ? 'Rashi Chandani' : wish.teacherStudentId === 'STU008' ? 'Riya Sharma' : 'Campus Mentor');
                   let teacherTcrId = wish.teachingId;
                   if (!teacherTcrId && wish.learningId && wish.learningId.includes('-')) {
@@ -638,7 +638,7 @@ const Dashboard = () => {
                               <span>{wish.category}</span>
                               <span>·</span>
                               <span className="text-amber-600 font-semibold">
-                                Open Request
+                                {wish.status === 'Pending' ? 'Awaiting reply' : 'Open Request'}
                               </span>
                             </div>
                           </>

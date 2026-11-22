@@ -227,13 +227,25 @@ const LearningRequests = () => {
   // Filter requests by status tab
   const filteredRequests = statusFilter === 'All'
     ? requests
-    : requests.filter((r) => (r.status || 'Open').toLowerCase() === statusFilter.toLowerCase());
+    : requests.filter((r) => {
+        const s = (r.status || 'Open').toLowerCase();
+        if (statusFilter.toLowerCase() === 'open') {
+          return s === 'open' || s === 'pending';
+        }
+        if (statusFilter.toLowerCase() === 'matched') {
+          return s === 'matched' || s === 'accepted';
+        }
+        return s === statusFilter.toLowerCase();
+      });
 
   const selectableCategories = ALL_CATEGORIES.filter((c) => c !== 'All');
 
   // Stats calculation
-  const openCount = requests.filter((r) => (r.status || 'Open') === 'Open').length;
-  const matchedCount = requests.filter((r) => r.status === 'Matched').length;
+  const openCount = requests.filter((r) => {
+    const s = r.status || 'Open';
+    return s === 'Open' || s === 'Pending';
+  }).length;
+  const matchedCount = requests.filter((r) => r.status === 'Matched' || r.status === 'Accepted').length;
   const completedCount = requests.filter((r) => r.status === 'Completed').length;
 
   return (
@@ -378,7 +390,7 @@ const LearningRequests = () => {
                       <div className="request-tags-left">
                         <span className="skill-category-badge">{req.category}</span>
                         <span className={`status-pill status-${status.toLowerCase()}`}>
-                          {status}
+                          {status === 'Pending' ? 'Awaiting reply' : status}
                         </span>
                         <span className={`priority-badge priority-${priority.toLowerCase()}`}>
                           <span className="priority-pulse-dot" aria-hidden="true"></span>
@@ -409,7 +421,7 @@ const LearningRequests = () => {
                     </div>
 
                     <div className="flex items-center gap-2 flex-wrap my-1.5 text-xs">
-                      {req.status === 'Matched' ? (
+                      {req.status === 'Matched' || req.status === 'Accepted' ? (
                         <AnimeIdChip
                           id={req.learningId}
                           type="LRN"

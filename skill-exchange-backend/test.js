@@ -673,6 +673,193 @@ function check(name, cond, extra = '') {
   }, { Authorization: `Bearer ${brandNewToken}` });
   check('a new account can message another student', brandNewMsg.status === 201 && brandNewMsg.data.Body.includes('Hi Vidhi'));
 
+  console.log('\n--- PROBLEM 1 PROOF: 3 Brand-New Account Pairs - No Auto Decision & 15s Polling Stay Pending ---');
+  const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
+  const testPairs = [
+    { prefix: 'p1', teacherSkill: 'Distributed Systems', extraSkill: 'Microservices Architecture' },
+    { prefix: 'p2', teacherSkill: 'Quantum Computing', extraSkill: 'Quantum Algorithms' },
+    { prefix: 'p3', teacherSkill: 'Cybersecurity & Cryptography', extraSkill: 'Network Defense' }
+  ];
+
+  await Promise.all(testPairs.map(async (pair, idx) => {
+    const pairNum = idx + 1;
+    const tEmail = `${pair.prefix}_t_${Date.now()}_${idx}@campus.edu`;
+    const lEmail = `${pair.prefix}_l_${Date.now()}_${idx}@campus.edu`;
+
+    // 1. Register Teacher A and Learner B
+    const teacherReg = await call('POST', '/api/register', {
+      name: `Teacher ${pairNum}`,
+      email: tEmail,
+      password: 'password123',
+      department: 'Computer Science'
+    }, { Authorization: '' });
+    check(`[Pair ${pairNum}] Teacher registered`, teacherReg.status === 201);
+    const teacherId = teacherReg.data.StudentID;
+    const teacherToken = teacherReg.data.token;
+
+    const learnerReg = await call('POST', '/api/register', {
+      name: `Learner ${pairNum}`,
+      email: lEmail,
+      password: 'password123',
+      department: 'Information Technology'
+    }, { Authorization: '' });
+    check(`[Pair ${pairNum}] Learner registered`, learnerReg.status === 201);
+    const learnerId = learnerReg.data.StudentID;
+    const learnerToken = learnerReg.data.token;
+
+    // 2. Teacher offers skills
+    const offerRes1 = await call('POST', `/api/students/${teacherId}/offered`, {
+      skillName: pair.teacherSkill,
+      category: 'Computer Science',
+      level: 'Advanced',
+      description: `Teaching ${pair.teacherSkill} fundamentals.`
+    }, { Authorization: `Bearer ${teacherToken}` });
+    check(`[Pair ${pairNum}] Teacher offered ${pair.teacherSkill}`, offerRes1.status === 201);
+    const skill1Id = offerRes1.data.skillId || offerRes1.data.SkillID;
+
+    const offerRes2 = await call('POST', `/api/students/${teacherId}/offered`, {
+      skillName: pair.extraSkill,
+      category: 'Computer Science',
+      level: 'Intermediate',
+      description: `Teaching ${pair.extraSkill}.`
+    }, { Authorization: `Bearer ${teacherToken}` });
+    check(`[Pair ${pairNum}] Teacher offered ${pair.extraSkill}`, offerRes2.status === 201);
+    const skill2Id = offerRes2.data.skillId || offerRes2.data.SkillID;
+
+    // 3. Learner wants skill 1
+    const wantRes = await call('POST', `/api/students/${learnerId}/wanted`, {
+      skillName: pair.teacherSkill,
+      category: 'Computer Science',
+      desiredLevel: 'Intermediate',
+      description: `Want to learn ${pair.teacherSkill}`
+    }, { Authorization: `Bearer ${learnerToken}` });
+    check(`[Pair ${pairNum}] Learner posted wanted skill`, wantRes.status === 201);
+
+    // 4. Learner requests exchange for skill 1
+    const req1Res = await call('POST', '/api/exchanges', {
+      teacherId,
+      skillId: skill1Id,
+      note: 'Topic: Fundamentals | Preferred Time: Tomorrow 4pm'
+    }, { Authorization: `Bearer ${learnerToken}` });
+    check(`[Pair ${pairNum}] Exchange request created with Pending status`, req1Res.status === 201 && req1Res.data.Status === 'Pending');
+    const exchange1Id = req1Res.data.ExchangeID;
+
+    // 5. Polling for 15 seconds: verify it stays Pending at every step
+    console.log(`  [Pair ${pairNum}] Starting 15 seconds polling verification for exchange #${exchange1Id}...`);
+    for (let sec = 3; sec <= 15; sec += 3) {
+      await sleep(3000);
+
+      // Check exchange directly
+      const pollEx = await call('GET', `/api/exchanges/${exchange1Id}`, null, { Authorization: `Bearer ${learnerToken}` });
+      check(`[Pair ${pairNum}] Poll at ${sec}s: exchange stays Pending`, pollEx.status === 200 && pollEx.data.Status === 'Pending');
+
+      // Check learner wanted skills endpoint: must be Pending (never auto Matched)
+      const pollWanted = await call('GET', `/api/students/${learnerId}/wanted`, null, { Authorization: `Bearer ${learnerToken}` });
+      const wantedItem = pollWanted.data.find((w) => w.SkillID === skill1Id);
+      check(`[Pair ${pairNum}] Poll at ${sec}s: wanted skill status is Pending (not Matched)`, wantedItem && wantedItem.status === 'Pending' && wantedItem.status !== 'Matched');
+
+      // Check teacher requests endpoint: shows pending request
+      const pollTeacherReqs = await call('GET', '/api/exchanges?status=Pending', null, { Authorization: `Bearer ${teacherToken}` });
+      const teacherHasReq = pollTeacherReqs.data.some((e) => e.ExchangeID === exchange1Id && e.Status === 'Pending');
+      check(`[Pair ${pairNum}] Poll at ${sec}s: teacher sees Pending request`, teacherHasReq);
+    }
+
+    // 6. Teacher explicitly accepts exchange 1
+    const acceptRes = await call('PATCH', `/api/exchanges/${exchange1Id}/status`, { status: 'Accepted' }, { Authorization: `Bearer ${teacherToken}` });
+    check(`[Pair ${pairNum}] Teacher explicitly accepts exchange 1`, acceptRes.status === 200 && acceptRes.data.Status === 'Accepted');
+
+    const verifyAccepted = await call('GET', `/api/exchanges/${exchange1Id}`, null, { Authorization: `Bearer ${learnerToken}` });
+    check(`[Pair ${pairNum}] Exchange 1 is now Accepted`, verifyAccepted.status === 200 && verifyAccepted.data.Status === 'Accepted');
+
+    // 7. Learner requests exchange 2
+    const req2Res = await call('POST', '/api/exchanges', {
+      teacherId,
+      skillId: skill2Id,
+      note: 'Second request for another topic'
+    }, { Authorization: `Bearer ${learnerToken}` });
+    check(`[Pair ${pairNum}] Exchange 2 created with Pending status`, req2Res.status === 201 && req2Res.data.Status === 'Pending');
+    const exchange2Id = req2Res.data.ExchangeID;
+
+    // 8. Teacher explicitly rejects exchange 2
+    const rejectRes = await call('PATCH', `/api/exchanges/${exchange2Id}/status`, { status: 'Rejected' }, { Authorization: `Bearer ${teacherToken}` });
+    check(`[Pair ${pairNum}] Teacher explicitly rejects exchange 2`, rejectRes.status === 200 && rejectRes.data.Status === 'Rejected');
+
+    // 9. Verify exchange 2 stays Rejected across polling
+    await sleep(1000);
+    const pollRejected = await call('GET', `/api/exchanges/${exchange2Id}`, null, { Authorization: `Bearer ${learnerToken}` });
+    check(`[Pair ${pairNum}] Exchange 2 stays Rejected`, pollRejected.status === 200 && pollRejected.data.Status === 'Rejected');
+  }));
+
+  console.log('\n--- PROBLEM 2 PROOF: Brand-New Account Lists Students, Sends Msg, Receiver Unread, Replies ---');
+  const userXEmail = `user_x_${Date.now()}@campus.edu`;
+  const userYEmail = `user_y_${Date.now()}@campus.edu`;
+
+  // Register User X and User Y
+  const userXReg = await call('POST', '/api/register', {
+    name: 'Xavier Student',
+    email: userXEmail,
+    password: 'password123',
+    department: 'Design'
+  }, { Authorization: '' });
+  const userXId = userXReg.data.StudentID;
+  const userXToken = userXReg.data.token;
+  check('User X registered', userXReg.status === 201);
+
+  const userYReg = await call('POST', '/api/register', {
+    name: 'Yara Student',
+    email: userYEmail,
+    password: 'password123',
+    department: 'Architecture'
+  }, { Authorization: '' });
+  const userYId = userYReg.data.StudentID;
+  const userYToken = userYReg.data.token;
+  check('User Y registered', userYReg.status === 201);
+
+  // 1. User X lists all students
+  const allStudentsRes = await call('GET', '/api/students', null, { Authorization: `Bearer ${userXToken}` });
+  check('User X lists all students via GET /api/students', allStudentsRes.status === 200 && Array.isArray(allStudentsRes.data));
+  const hasYara = allStudentsRes.data.some((s) => s.StudentID === userYId || s.id === userYId || s.Name === 'Yara Student');
+  check('Student list includes Yara', hasYara);
+  check('Student list contains NO password or email', allStudentsRes.data.every((s) => !s.Password && !s.password && !s.Email && !s.email));
+
+  // 2. User X sends message to User Y
+  const sendRes = await call('POST', '/api/messages', {
+    receiverId: userYId,
+    body: 'Hello Yara, are you interested in collaborating on design tokens?'
+  }, { Authorization: `Bearer ${userXToken}` });
+  check('User X sends message to User Y', sendRes.status === 201 && sendRes.data.Body.includes('collaborating on design tokens'));
+
+  // 3. User Y checks conversations: sees User X with unreadCount === 1
+  const yConvRes = await call('GET', `/api/students/${userYId}/conversations`, null, { Authorization: `Bearer ${userYToken}` });
+  check('User Y loads conversations with token', yConvRes.status === 200 && Array.isArray(yConvRes.data));
+  const xInYConv = yConvRes.data.find((c) => Number(c.peerId) === userXId);
+  check('User Y sees conversation with User X', !!xInYConv);
+  check('User Y sees unread count === 1', xInYConv && xInYConv.unreadCount === 1);
+  check('User Y sees latest message text and time', xInYConv && xInYConv.messages.length === 1 && xInYConv.messages[0].text.includes('collaborating on design tokens'));
+
+  // 4. User Y replies to User X
+  const replyRes = await call('POST', '/api/messages', {
+    receiverId: userXId,
+    body: 'Hi Xavier! Yes absolutely, let us set up a time.'
+  }, { Authorization: `Bearer ${userYToken}` });
+  check('User Y replies to User X', replyRes.status === 201 && replyRes.data.Body.includes('Yes absolutely'));
+
+  // 5. User X checks conversations: sees User Y with unreadCount === 1
+  const xConvRes = await call('GET', `/api/students/${userXId}/conversations`, null, { Authorization: `Bearer ${userXToken}` });
+  check('User X loads conversations with token', xConvRes.status === 200);
+  const yInXConv = xConvRes.data.find((c) => Number(c.peerId) === userYId);
+  check('User X sees conversation with User Y', !!yInXConv);
+  check('User X sees unread count === 1 for reply', yInXConv && yInXConv.unreadCount === 1);
+  check('User X sees 2 messages total in thread', yInXConv && yInXConv.messages.length === 2);
+
+  // 6. User X marks conversation as read
+  const userXMarkReadRes = await call('PATCH', `/api/students/${userXId}/messages/${userYId}/read`, null, { Authorization: `Bearer ${userXToken}` });
+  check('User X marks conversation as read -> 200', userXMarkReadRes.status === 200);
+  const xConvAfterRead = await call('GET', `/api/students/${userXId}/conversations`, null, { Authorization: `Bearer ${userXToken}` });
+  const yInXAfter = xConvAfterRead.data.find((c) => Number(c.peerId) === userYId);
+  check('User X unread count becomes 0 after marking read', yInXAfter && yInXAfter.unreadCount === 0);
+
   console.log(`\n${passed} passed, ${failed} failed`);
   if (testServer) {
     testServer.close(() => {

@@ -186,7 +186,7 @@ const ExploreSkills = () => {
 
     const targetMentor = requestModalSkill.mentorName;
     setRequestModalSkill(null);
-    showToast(`Learning request for "${requestModalSkill.name}" sent to ${targetMentor}!`);
+    showToast(`Request sent. Awaiting ${targetMentor}'s reply.`);
   };
 
   return (
