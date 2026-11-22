@@ -26,7 +26,7 @@ import useLiveRefresh from '../utils/useLiveRefresh.js';
 import AnimatedCounter from '../components/AnimatedCounter.jsx';
 import PowerLevelMeter from '../components/PowerLevelMeter.jsx';
 import AnimeIdChip, { AnimeIdGuideButton } from '../components/AnimeIdChip.jsx';
-import { formatShortName, ENROLLED_LEARNERS_MAP } from '../utils/idEngine.js';
+import { formatShortName } from '../utils/idEngine.js';
 import './Dashboard.css';
 
 const Dashboard = () => {
@@ -420,7 +420,7 @@ const Dashboard = () => {
               {user.skillsOffered && user.skillsOffered.length > 0 ? (
                 user.skillsOffered.map((skill) => {
                   const teachingId = skill.teachingId || skill.displayId || 'TCR001CRS001';
-                  const learners = skill.enrolledLearners || ENROLLED_LEARNERS_MAP[teachingId] || [];
+                  const learners = skill.enrolledLearners || [];
 
                   return (
                     <div key={skill.id} className="dash-skill-item">

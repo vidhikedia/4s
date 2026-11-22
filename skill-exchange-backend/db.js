@@ -19,6 +19,39 @@ function safeAddColumn(sql) {
   }
 }
 
+function safeCreateIndex(sql) {
+  try {
+    db.exec(sql);
+  } catch (err) {
+    if (err && err.message && err.message.toLowerCase().includes('no such table')) {
+      return;
+    }
+    throw err;
+  }
+}
+
+function safeCreateUniquePartialIndex() {
+  try {
+    const tbl = db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='EXCHANGE'").get();
+    if (!tbl) return;
+    const dupes = db.prepare(`
+      SELECT 1 FROM EXCHANGE 
+      WHERE Status IN ('Pending', 'Accepted') 
+      GROUP BY TeacherID, LearnerID, SkillID 
+      HAVING COUNT(*) > 1 
+      LIMIT 1
+    `).all();
+    if (dupes.length === 0) {
+      db.exec("CREATE UNIQUE INDEX IF NOT EXISTS idx_exchange_active_unique ON EXCHANGE(TeacherID, LearnerID, SkillID) WHERE Status IN ('Pending', 'Accepted');");
+    }
+  } catch (err) {
+    if (err && err.message && err.message.toLowerCase().includes('no such table')) {
+      return;
+    }
+    throw err;
+  }
+}
+
 function runMigrations() {
   safeAddColumn('ALTER TABLE EXCHANGE ADD COLUMN Note TEXT;');
   safeAddColumn('ALTER TABLE EXCHANGE ADD COLUMN UpdatedAt TEXT;');
@@ -26,6 +59,16 @@ function runMigrations() {
   safeAddColumn('ALTER TABLE NOTIFICATION ADD COLUMN RelatedID TEXT;');
   safeAddColumn('ALTER TABLE STUDENT ADD COLUMN LastSeenAt TEXT;');
   safeAddColumn('ALTER TABLE STUDENT ADD COLUMN SkillMasterShown INTEGER DEFAULT 0;');
+
+  safeCreateIndex('CREATE INDEX IF NOT EXISTS idx_exchange_skill ON EXCHANGE(SkillID);');
+  safeCreateIndex('CREATE INDEX IF NOT EXISTS idx_exchange_status ON EXCHANGE(Status);');
+  safeCreateIndex('CREATE INDEX IF NOT EXISTS idx_session_exchange ON SESSION(ExchangeID);');
+  safeCreateIndex('CREATE INDEX IF NOT EXISTS idx_session_status_date ON SESSION(Status, SessionDate);');
+  safeCreateIndex('CREATE INDEX IF NOT EXISTS idx_feedback_exchange ON FEEDBACK(ExchangeID);');
+  safeCreateIndex('CREATE INDEX IF NOT EXISTS idx_feedback_givenby ON FEEDBACK(GivenBy);');
+  safeCreateIndex('CREATE INDEX IF NOT EXISTS idx_message_receiver_read ON MESSAGE(ReceiverID, IsRead);');
+  safeCreateIndex('CREATE INDEX IF NOT EXISTS idx_notification_student_read ON NOTIFICATION(StudentID, IsRead);');
+  safeCreateUniquePartialIndex();
 }
 runMigrations();
 

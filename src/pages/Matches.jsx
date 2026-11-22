@@ -24,7 +24,6 @@ import {
   GraduationCap
 } from 'lucide-react';
 import {
-  SAMPLE_PEER_MATCHES,
   ALL_CATEGORIES,
   doesStudentOfferSkill,
   getStudentOfferedSkills,
@@ -261,57 +260,6 @@ const Matches = () => {
           wantsToLearn: r.wantsToLearn || '',
           mutualSwap: Boolean(r.mutualSwap || r.mutualSwapAvailable),
           peerOriginal: r
-        };
-      });
-    } else {
-      // Safe fallback from SAMPLE_PEER_MATCHES if backend has not returned matches yet
-      pool = SAMPLE_PEER_MATCHES.filter((p) => p.studentId !== currentStudentId).map((p, idx) => {
-        const rec = p.teachingRecords?.[0] || {
-          teachingId: p.teachingId || `TCH00${idx + 1}`,
-          courseId: p.courseId || `CRS00${idx + 1}`,
-          skillName: p.skillOffered || 'Skill',
-          category: p.category || 'General',
-          proficiency: p.proficiencyLevel || 'Advanced',
-          availability: p.availability || 'Flexible Schedule'
-        };
-        const courseName = rec.skillName || p.skillOffered || 'Skill';
-        return {
-          matchId: `MAT_ALL_${rec.teachingId}`,
-          Match_ID: `MAT_ALL_${rec.teachingId}`,
-          studentId: currentStudentId,
-          teacherStudentId: p.studentId,
-          Student_ID: p.studentId,
-          teacherId: Number(String(p.studentId || '').replace(/\D/g, '')) || idx + 2,
-          skillId: idx + 1,
-          learningId: 'LRN001',
-          teachingId: rec.teachingId,
-          SS_ID: rec.teachingId,
-          courseId: rec.courseId,
-          courseName,
-          score: p.compatibilityScore || 88,
-          Match_Score: p.compatibilityScore || 88,
-          matchReasons: [
-            `Campus Peer Mentor: ${p.name || 'Peer'}`,
-            `Offers ${rec.skillName} (${rec.courseId})`
-          ],
-          status: 'Suggested',
-          peerId: p.id,
-          name: p.name || 'Campus Peer',
-          dept: p.dept || 'Engineering',
-          avatar: p.avatar || 'SP',
-          avatarBg: p.avatarBg || 'avatar-indigo',
-          rating: p.rating || '5.0',
-          sessionsDelivered: p.sessionsDelivered || 10,
-          skillOffered: rec.skillName,
-          teachSkill: rec.skillName,
-          category: rec.category,
-          proficiencyLevel: rec.proficiency || p.proficiencyLevel || 'Advanced',
-          availability: rec.availability || p.availability || 'Flexible Schedule',
-          bio: p.bio || '',
-          wantsToLearn: p.wantsToLearn || '',
-          mutualSwap: Boolean(p.mutualSwapAvailable),
-          teachingRecord: rec,
-          peerOriginal: p
         };
       });
     }
@@ -708,7 +656,8 @@ const Matches = () => {
                     {/* Single Learning ID (names both person and course) */}
                     {(() => {
                       const peerStuId = match.Student_ID || match.studentId || match.peerStudentId || 'STU004';
-                      const teacherTcr = getOrAssignTeacherCourse(peerStuId, match.teachSkill || match.name);
+                      const cSeq = match.skillId || (match.courseId ? match.courseId.replace(/\D/g, '') : null);
+                      const teacherTcr = cSeq ? buildTeachingId(peerStuId, cSeq) : getOrAssignTeacherCourse(peerStuId, match.teachSkill || match.name);
                       const matchLearningId = buildLearningId(user?.studentId || 'STU001', teacherTcr);
 
                       return (

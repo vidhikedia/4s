@@ -256,7 +256,10 @@ const INITIAL_TEACHER_SKILLS = {
  * Resolves or creates a deterministic Teaching ID for a teacher and a skill.
  * Reuses the existing course number for duplicate offers of the same skill.
  */
-export const getOrAssignTeacherCourse = (teacherStudentId = 'STU001', skillName = '') => {
+export const getOrAssignTeacherCourse = (teacherStudentId = 'STU001', skillName = '', courseSeqHint = null) => {
+  if (courseSeqHint && !isNaN(Number(courseSeqHint))) {
+    return buildTeachingId(teacherStudentId, Number(courseSeqHint));
+  }
   const stuNum = extractStudentNumber(teacherStudentId);
   const normSkill = normalizeSkillName(skillName);
 
@@ -374,6 +377,12 @@ export const getReadableId = (recordOrId, type = '', studentId = 'STU001') => {
     // Check seed map
     if (SEED_DISPLAY_IDS[trimmed]) return SEED_DISPLAY_IDS[trimmed];
 
+    // Compute from backend format TCH-0001
+    const matchTch = trimmed.match(/^TCH[-_]?(\d+)$/i);
+    if (matchTch) {
+      return buildTeachingId(studentId, parseInt(matchTch[1], 10));
+    }
+
     // Check persistent map
     const map = getDisplayIdMap();
     if (map[trimmed]) return map[trimmed];
@@ -443,18 +452,27 @@ export const getReadableId = (recordOrId, type = '', studentId = 'STU001') => {
       return AWAITING_TEACHER_ID;
     }
 
-    const learnerStuId = record?.learnerStudentId || record?.studentId || record?.Student_ID || studentId;
+    const learnerStuId = record?.learnerStudentId || record?.studentId || record?.Student_ID || record?.LearnerID || studentId;
     let teacherTcr = record?.teacherTcrId || record?.teachingId;
     if (!teacherTcr || !/^TCR\d{3,4}CRS\d{3,4}$/.test(teacherTcr)) {
-      // Derive teacher TCR from skill name if matched
+      // Derive teacher TCR from backend values if available
       const teacherStu = record?.teacherStudentId || record?.teacherId || record?.TeacherID || 'STU004';
-      teacherTcr = getOrAssignTeacherCourse(teacherStu, record?.name || record?.skill || '');
+      const cSeq = record?.skillId || record?.SkillID || (record?.courseId ? parseInt(String(record.courseId).replace(/\D/g, ''), 10) : null);
+      if (cSeq && !isNaN(Number(cSeq))) {
+        teacherTcr = buildTeachingId(teacherStu, cSeq);
+      } else {
+        teacherTcr = getOrAssignTeacherCourse(teacherStu, record?.name || record?.skill || '');
+      }
     }
     return buildLearningId(learnerStuId, teacherTcr);
   }
 
   // Otherwise, it's a Teaching skill
-  const teacherStuId = record?.teacherStudentId || record?.studentId || record?.Student_ID || studentId;
+  const teacherStuId = record?.teacherStudentId || record?.studentId || record?.Student_ID || record?.StudentID || studentId;
+  const cSeq = record?.skillId || record?.SkillID || (record?.courseId ? parseInt(String(record.courseId).replace(/\D/g, ''), 10) : null);
+  if (cSeq && !isNaN(Number(cSeq))) {
+    return buildTeachingId(teacherStuId, cSeq);
+  }
   const skillTitle = record?.name || record?.skill || record?.skillName || '';
   const newTcrId = getOrAssignTeacherCourse(teacherStuId, skillTitle);
 

@@ -5,6 +5,7 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
+    "test": "npm --prefix skill-exchange-backend test",
     "build": "vite build",
     "typecheck": "tsc --noEmit",
     "preview": "vite preview",

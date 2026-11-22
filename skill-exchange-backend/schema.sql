@@ -185,3 +185,13 @@ CREATE INDEX idx_message_pair ON MESSAGE(SenderID, ReceiverID);
 CREATE INDEX idx_availability_student ON AVAILABILITY(StudentID);
 CREATE INDEX idx_student_badge ON STUDENT_BADGE(StudentID);
 CREATE INDEX idx_notification_student ON NOTIFICATION(StudentID);
+
+CREATE INDEX IF NOT EXISTS idx_exchange_skill ON EXCHANGE(SkillID);
+CREATE INDEX IF NOT EXISTS idx_exchange_status ON EXCHANGE(Status);
+CREATE INDEX IF NOT EXISTS idx_session_exchange ON SESSION(ExchangeID);
+CREATE INDEX IF NOT EXISTS idx_session_status_date ON SESSION(Status, SessionDate);
+CREATE INDEX IF NOT EXISTS idx_feedback_exchange ON FEEDBACK(ExchangeID);
+CREATE INDEX IF NOT EXISTS idx_feedback_givenby ON FEEDBACK(GivenBy);
+CREATE INDEX IF NOT EXISTS idx_message_receiver_read ON MESSAGE(ReceiverID, IsRead);
+CREATE INDEX IF NOT EXISTS idx_notification_student_read ON NOTIFICATION(StudentID, IsRead);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_exchange_active_unique ON EXCHANGE(TeacherID, LearnerID, SkillID) WHERE Status IN ('Pending', 'Accepted');

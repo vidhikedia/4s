@@ -1137,6 +1137,84 @@ function check(name, cond, extra = '') {
   const elenaNotif = p3ElenaNotifs.data?.find((n) => n.RelatedID === String(p3FrankExId) || (n.Message && n.Message.includes('Compiler Optimizations')));
   check('[Pair 3] Elena received notification that Frank is no longer requesting skill', !!elenaNotif && elenaNotif.Message.includes('is no longer requesting Compiler Optimizations'));
 
+  // --- ITEM 1: Matches Empty State & Backend Matches ---
+  console.log('\n--- ITEM 1: Matches Returns Backend Data (No Sample Fallback) ---');
+  const newStudentRes = await call('POST', '/api/register', {
+    name: 'Test Isolation Student',
+    email: `isolated_${Date.now()}@campus.edu`,
+    password: 'password123',
+    department: 'Computer Science'
+  }, { Authorization: '' });
+  const isoStudentId = newStudentRes.data.StudentID;
+  const isoStudentToken = newStudentRes.data.token;
+
+  const isoMatchesRes = await call('GET', `/api/students/${isoStudentId}/matches`, null, {
+    Authorization: `Bearer ${isoStudentToken}`
+  });
+  check('Item 1: student with no matches returns empty array [] from backend', Array.isArray(isoMatchesRes.data) && isoMatchesRes.data.length === 0);
+
+  // --- ITEM 2: Dashboard Shows Only Enrolled Learners From Backend ---
+  console.log('\n--- ITEM 2: Dashboard Enrolled Learners from Backend Only ---');
+  const isoDashRes = await call('GET', `/api/students/${isoStudentId}/dashboard`, null, {
+    Authorization: `Bearer ${isoStudentToken}`
+  });
+  check('Item 2: student dashboard loads with 200', isoDashRes.status === 200);
+  const skillsOffered = isoDashRes.data?.student?.skillsOffered || [];
+  check('Item 2: student with no offers has empty skillsOffered', skillsOffered.length === 0);
+
+  // Have isolated student offer a skill
+  const offerRes = await call('POST', `/api/students/${isoStudentId}/offered`, {
+    skillName: 'Test Automation Engineering',
+    category: 'Computer Science',
+    level: 'Advanced',
+    description: 'Unit testing and integration test suites'
+  }, { Authorization: `Bearer ${isoStudentToken}` });
+  check('Item 2: student offers a skill -> 201', offerRes.status === 201);
+
+  const isoDashRes2 = await call('GET', `/api/students/${isoStudentId}/dashboard`, null, {
+    Authorization: `Bearer ${isoStudentToken}`
+  });
+  const skillsOffered2 = isoDashRes2.data?.student?.skillsOffered || [];
+  check('Item 2: student dashboard loads offered skills from backend', skillsOffered2.length === 1);
+  check('Item 2: skill contains backend properties (skillId, courseId)', !!skillsOffered2[0]?.courseId && !!skillsOffered2[0]?.skillId);
+  check('Item 2: skill with no enrollments has no fallback mock learners', !skillsOffered2[0]?.enrolledLearners || skillsOffered2[0].enrolledLearners.length === 0);
+
+  // --- ITEM 4: Indexes in schema.sql and db.js Verification ---
+  console.log('\n--- ITEM 4: Indexes Verification in Temporary Database ---');
+  const allIndexes = db.prepare("SELECT name, tbl_name, sql FROM sqlite_master WHERE type = 'index'").all();
+  const indexNames = new Set(allIndexes.map(i => i.name));
+
+  check('Item 4: idx_exchange_skill exists', indexNames.has('idx_exchange_skill'));
+  check('Item 4: idx_exchange_status exists', indexNames.has('idx_exchange_status'));
+  check('Item 4: idx_session_exchange exists', indexNames.has('idx_session_exchange'));
+  check('Item 4: idx_session_status_date exists', indexNames.has('idx_session_status_date'));
+  check('Item 4: idx_feedback_exchange exists', indexNames.has('idx_feedback_exchange'));
+  check('Item 4: idx_feedback_givenby exists', indexNames.has('idx_feedback_givenby'));
+  check('Item 4: idx_message_receiver_read exists', indexNames.has('idx_message_receiver_read'));
+  check('Item 4: idx_notification_student_read exists', indexNames.has('idx_notification_student_read'));
+  check('Item 4: idx_exchange_active_unique partial index exists', indexNames.has('idx_exchange_active_unique'));
+
+  let dupPendingFailed = false;
+  try {
+    db.prepare("INSERT INTO EXCHANGE (TeacherID, LearnerID, SkillID, Status) VALUES (1, 2, 1, 'Pending')").run();
+    db.prepare("INSERT INTO EXCHANGE (TeacherID, LearnerID, SkillID, Status) VALUES (1, 2, 1, 'Pending')").run();
+  } catch (err) {
+    if (err && err.message && err.message.toLowerCase().includes('unique')) {
+      dupPendingFailed = true;
+    }
+  }
+  check('Item 4: unique partial index prevents duplicate Pending exchanges', dupPendingFailed);
+
+  let dupCompletedSucceeded = false;
+  try {
+    db.prepare("INSERT INTO EXCHANGE (TeacherID, LearnerID, SkillID, Status) VALUES (1, 3, 1, 'Completed')").run();
+    db.prepare("INSERT INTO EXCHANGE (TeacherID, LearnerID, SkillID, Status) VALUES (1, 3, 1, 'Completed')").run();
+    dupCompletedSucceeded = true;
+  } catch (err) {
+    dupCompletedSucceeded = false;
+  }
+  check('Item 4: unique partial index allows duplicate Completed exchanges', dupCompletedSucceeded);
+
   console.log(`\n${passed} passed, ${failed} failed`);
   if (testServer) {
     testServer.close(() => {
