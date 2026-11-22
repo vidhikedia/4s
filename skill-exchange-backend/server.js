@@ -1,4 +1,4 @@
-// Campus Skill Exchange API - zero dependencies (Node 22.13+).
+// Campus Skill Exchange API - zero dependencies (Node 22.13+) / PostgreSQL (Neon).
 // Start with: npm start   (after: npm run seed)
 const http = require('http');
 const crypto = require('crypto');
@@ -173,45 +173,45 @@ function isStudentOnline(lastSeenAt) {
   return Math.abs(Date.now() - lastTime) <= 2 * 60 * 1000;
 }
 
-function touchStudentLastSeen(studentId) {
+async function touchStudentLastSeen(studentId) {
   if (!studentId) return;
   const sid = Number(studentId);
   if (!sid || isNaN(sid)) return;
   try {
-    db.prepare("UPDATE STUDENT SET LastSeenAt = datetime('now') WHERE StudentID = ?").run(sid);
+    await db.prepare("UPDATE STUDENT SET LastSeenAt = datetime('now') WHERE StudentID = ?").run(sid);
   } catch {}
 }
 
-const getStudent = (id) => {
-  const s = db.prepare(`SELECT ${STUDENT_COLS} FROM STUDENT WHERE StudentID = ?`).get(id);
+const getStudent = async (id) => {
+  const s = await db.prepare(`SELECT ${STUDENT_COLS} FROM STUDENT WHERE StudentID = ?`).get(id);
   if (!s) throw notFound('Student not found');
   return s;
 };
 
-const getExchange = (id) => {
-  const e = db.prepare('SELECT * FROM EXCHANGE WHERE ExchangeID = ?').get(id);
+const getExchange = async (id) => {
+  const e = await db.prepare('SELECT * FROM EXCHANGE WHERE ExchangeID = ?').get(id);
   if (!e) throw notFound('Exchange not found');
   return e;
 };
 
-function findOrCreateSkill(skillName, category) {
+async function findOrCreateSkill(skillName, category) {
   const name = String(skillName || '').trim();
   if (!name) throw bad('skillName is required');
-  const existing = db.prepare('SELECT * FROM SKILL WHERE lower(SkillName) = lower(?)').get(name);
+  const existing = await db.prepare('SELECT * FROM SKILL WHERE lower(SkillName) = lower(?)').get(name);
   if (existing) return existing;
-  const r = db.prepare('INSERT INTO SKILL (SkillName, Category) VALUES (?,?)')
+  const r = await db.prepare('INSERT INTO SKILL (SkillName, Category) VALUES (?,?)')
     .run(name, category ?? null);
-  return db.prepare('SELECT * FROM SKILL WHERE SkillID = ?').get(r.lastInsertRowid);
+  return await db.prepare('SELECT * FROM SKILL WHERE SkillID = ?').get(r.lastInsertRowid);
 }
 
-function resolveSkill(body) {
+async function resolveSkill(body) {
   if (body.skillId) {
-    const sk = db.prepare('SELECT * FROM SKILL WHERE SkillID = ?').get(body.skillId);
+    const sk = await db.prepare('SELECT * FROM SKILL WHERE SkillID = ?').get(body.skillId);
     if (!sk) throw bad('Referenced student, skill or exchange does not exist');
     return sk;
   }
   const name = body.skillName || body.name || body.skill;
-  if (name) return findOrCreateSkill(name, body.category);
+  if (name) return await findOrCreateSkill(name, body.category);
   throw bad('skillId or skillName is required');
 }
 
@@ -228,8 +228,8 @@ function avatarBg(id) {
   return AVATAR_BGS[(Number(id) || 0) % AVATAR_BGS.length];
 }
 
-function computePowerLevel(studentId, taughtCount, attendedCount, skillsOfferedCount) {
-  const badgesRow = db.prepare('SELECT COUNT(*) AS c FROM STUDENT_BADGE WHERE StudentID = ?').get(studentId);
+async function computePowerLevel(studentId, taughtCount, attendedCount, skillsOfferedCount) {
+  const badgesRow = await db.prepare('SELECT COUNT(*) AS c FROM STUDENT_BADGE WHERE StudentID = ?').get(studentId);
   const badgesCount = badgesRow ? badgesRow.c : 0;
   const raw = 100 + (25 * taughtCount) + (15 * attendedCount) + (30 * badgesCount) + (10 * skillsOfferedCount);
   const powerLevel = Math.min(1000, raw);
@@ -240,26 +240,28 @@ function computePowerLevel(studentId, taughtCount, attendedCount, skillsOfferedC
   return { powerLevel, powerLevelMax: 1000, rank, title: rank, badgeCount: badgesCount };
 }
 
-function teacherRating(studentId) {
-  const row = db.prepare(
+async function teacherRating(studentId) {
+  const row = await db.prepare(
     `SELECT ROUND(AVG(f.Rating), 2) AS AvgRating, COUNT(f.FeedbackID) AS Reviews
      FROM EXCHANGE e
      JOIN FEEDBACK f ON f.ExchangeID = e.ExchangeID AND f.GivenBy = e.LearnerID
      WHERE e.TeacherID = ?`
   ).get(studentId);
-  return { avgRating: row?.AvgRating != null ? Number(row.AvgRating) : null, reviews: row?.Reviews || 0 };
+  const reviews = row?.Reviews || 0;
+  const avgRating = (reviews > 0 && row?.AvgRating != null) ? Number(row.AvgRating) : null;
+  return { avgRating, reviews, reviewCount: reviews, reviewsCount: reviews };
 }
 
-function sessionCounts(studentId) {
-  const taught = db.prepare(
+async function sessionCounts(studentId) {
+  const taughtRow = await db.prepare(
     `SELECT COUNT(*) AS n FROM SESSION s JOIN EXCHANGE e ON e.ExchangeID = s.ExchangeID
      WHERE e.TeacherID = ? AND s.Status = 'Completed'`
-  ).get(studentId).n;
-  const attended = db.prepare(
+  ).get(studentId);
+  const attendedRow = await db.prepare(
     `SELECT COUNT(*) AS n FROM SESSION s JOIN EXCHANGE e ON e.ExchangeID = s.ExchangeID
      WHERE e.LearnerID = ? AND s.Status = 'Completed'`
-  ).get(studentId).n;
-  return { sessionsTaught: taught, sessionsAttended: attended };
+  ).get(studentId);
+  return { sessionsTaught: taughtRow ? taughtRow.n : 0, sessionsAttended: attendedRow ? attendedRow.n : 0 };
 }
 
 const SESSION_SELECT = `
@@ -308,6 +310,7 @@ function mapSession(row, viewerId) {
     learnerAvatar: initials(row.LearnerName),
     teacherStudentId: displayStudentId(row.TeacherID),
     learnerStudentId: displayStudentId(row.LearnerID),
+    partnerStudentId: isTeacher ? displayStudentId(row.LearnerID) : displayStudentId(row.TeacherID),
     partnerName,
     partnerDept,
     partnerAvatar: initials(partnerName),
@@ -358,8 +361,8 @@ function isFutureSession(row, now = new Date()) {
   return sessionDateTime.getTime() > now.getTime();
 }
 
-function offeredRows(studentId) {
-  return db.prepare(
+async function offeredRows(studentId) {
+  return await db.prepare(
     `SELECT sk.SkillID, sk.SkillName, sk.Category, so.ProficiencyLevel AS Level,
             so.Description, so.Availability, so.Tags, so.SampleTopics, so.YearsOfExperience
      FROM SKILL_OFFERED so JOIN SKILL sk ON sk.SkillID = so.SkillID
@@ -367,8 +370,8 @@ function offeredRows(studentId) {
   ).all(studentId);
 }
 
-function wantedRows(studentId) {
-  return db.prepare(
+async function wantedRows(studentId) {
+  return await db.prepare(
     `SELECT sk.SkillID, sk.SkillName, sk.Category, sw.DesiredLevel AS Level,
             sw.Description, sw.Priority, sw.PreferredAvailability, sw.TargetGoal,
             (SELECT e.ExchangeID FROM EXCHANGE e
@@ -427,15 +430,17 @@ function mapWanted(row, studentId) {
   };
 }
 
-function mapOffered(row, studentId) {
-  const helped = db.prepare(
+async function mapOffered(row, studentId) {
+  const helpedRow = await db.prepare(
     `SELECT COUNT(*) AS n FROM EXCHANGE
      WHERE TeacherID = ? AND SkillID = ? AND Status IN ('Accepted','Completed')`
-  ).get(studentId, row.SkillID).n;
+  ).get(studentId, row.SkillID);
+  const helped = helpedRow ? helpedRow.n : 0;
   const tchId = `TCH-${String(row.SkillID).padStart(4, '0')}`;
   const crsId = `CRS${String(row.SkillID).padStart(3, '0')}`;
   const tags = row.Tags ? row.Tags.split(',').map((t) => t.trim()) : [row.Category, row.SkillName];
   const sampleTopics = row.SampleTopics ? row.SampleTopics.split(',').map((t) => t.trim()) : [];
+  const ratingInfo = await teacherRating(studentId);
 
   return {
     ...row,
@@ -459,7 +464,9 @@ function mapOffered(row, studentId) {
     Description: row.Description || '',
     availability: row.Availability || 'Flexible',
     learnersHelped: helped,
-    rating: teacherRating(studentId).avgRating || 5.0,
+    rating: ratingInfo.reviews > 0 ? Number(ratingInfo.avgRating).toFixed(2) : null,
+    reviewsCount: ratingInfo.reviews || 0,
+    reviewCount: ratingInfo.reviews || 0,
     tags,
     sampleTopics,
   };
@@ -477,8 +484,8 @@ function WEEKDAYS() {
   ];
 }
 
-function getAvailability(studentId) {
-  const rows = db.prepare(
+async function getAvailability(studentId) {
+  const rows = await db.prepare(
     'SELECT * FROM AVAILABILITY WHERE StudentID = ? ORDER BY AvailabilityID'
   ).all(studentId);
   return WEEKDAYS().map((d) => {
@@ -495,7 +502,7 @@ function getAvailability(studentId) {
   });
 }
 
-function listFeedbackForStudent(studentId, filterType = 'all') {
+async function listFeedbackForStudent(studentId, filterType = 'all') {
   const sid = Number(studentId);
   let sql = `SELECT f.*, s.Name AS GivenByName, e.TeacherID, e.LearnerID, e.SkillID, sk.SkillName,
                     sess.SessionID, sess.SessionDate
@@ -506,17 +513,17 @@ function listFeedbackForStudent(studentId, filterType = 'all') {
              LEFT JOIN SESSION sess ON sess.ExchangeID = e.ExchangeID `;
   if (filterType === 'received') {
     sql += `WHERE (e.TeacherID = ? OR e.LearnerID = ?) AND f.GivenBy <> ? ORDER BY f.FeedbackID DESC`;
-    return db.prepare(sql).all(sid, sid, sid);
+    return await db.prepare(sql).all(sid, sid, sid);
   }
   if (filterType === 'given') {
     sql += `WHERE f.GivenBy = ? ORDER BY f.FeedbackID DESC`;
-    return db.prepare(sql).all(sid);
+    return await db.prepare(sql).all(sid);
   }
   sql += `WHERE (e.TeacherID = ? OR e.LearnerID = ? OR f.GivenBy = ?) ORDER BY f.FeedbackID DESC`;
-  return db.prepare(sql).all(sid, sid, sid);
+  return await db.prepare(sql).all(sid, sid, sid);
 }
 
-function mapReview(row, viewerId) {
+async function mapReview(row, viewerId) {
   const vid = Number(viewerId);
   const isGiven = Number(row.GivenBy) === vid;
   const isReceived = !isGiven;
@@ -525,7 +532,7 @@ function mapReview(row, viewerId) {
   const sesId = row.SessionID ? `SES-${String(row.SessionID).padStart(4, '0')}` : '';
 
   const targetId = Number(row.GivenBy) === Number(row.TeacherID) ? row.LearnerID : row.TeacherID;
-  const target = db.prepare('SELECT Name FROM STUDENT WHERE StudentID = ?').get(targetId);
+  const target = await db.prepare('SELECT Name FROM STUDENT WHERE StudentID = ?').get(targetId);
 
   return {
     ...row,
@@ -557,46 +564,51 @@ function mapReview(row, viewerId) {
   };
 }
 
-function checkAndAwardBadges(studentId) {
+async function checkAndAwardBadges(studentId) {
   if (!studentId) return;
   const sid = Number(studentId);
-  const earnedRows = db.prepare('SELECT BadgeID FROM STUDENT_BADGE WHERE StudentID = ?').all(sid);
+  const earnedRows = await db.prepare('SELECT BadgeID FROM STUDENT_BADGE WHERE StudentID = ?').all(sid);
   const earnedSet = new Set(earnedRows.map((r) => r.BadgeID));
 
-  const counts = sessionCounts(sid);
-  const offered = db.prepare(
+  const counts = await sessionCounts(sid);
+  const offered = await db.prepare(
     `SELECT so.*, s.SkillName FROM SKILL_OFFERED so
      JOIN SKILL s ON s.SkillID = so.SkillID WHERE so.StudentID = ? LIMIT 1`
   ).get(sid);
-  const wanted = db.prepare(
+  const wanted = await db.prepare(
     `SELECT sw.*, s.SkillName FROM SKILL_WANTED sw
      JOIN SKILL s ON s.SkillID = sw.SkillID WHERE sw.StudentID = ? LIMIT 1`
   ).get(sid);
 
-  const offeredCount = db.prepare('SELECT COUNT(*) AS c FROM SKILL_OFFERED WHERE StudentID = ?').get(sid).c;
-  const wantedCount = db.prepare('SELECT COUNT(*) AS c FROM SKILL_WANTED WHERE StudentID = ?').get(sid).c;
-  const matchesCount = db.prepare(
+  const offeredCountRow = await db.prepare('SELECT COUNT(*) AS c FROM SKILL_OFFERED WHERE StudentID = ?').get(sid);
+  const offeredCount = offeredCountRow ? offeredCountRow.c : 0;
+  const wantedCountRow = await db.prepare('SELECT COUNT(*) AS c FROM SKILL_WANTED WHERE StudentID = ?').get(sid);
+  const wantedCount = wantedCountRow ? wantedCountRow.c : 0;
+  const matchesCountRow = await db.prepare(
     "SELECT COUNT(*) AS c FROM EXCHANGE WHERE (TeacherID = ? OR LearnerID = ?) AND Status <> 'Cancelled'"
-  ).get(sid, sid).c;
-  const sessionRow = db.prepare(
+  ).get(sid, sid);
+  const matchesCount = matchesCountRow ? matchesCountRow.c : 0;
+  const sessionRow = await db.prepare(
     `SELECT s.Topic, sk.SkillName FROM SESSION s
      JOIN EXCHANGE e ON e.ExchangeID = s.ExchangeID
      JOIN SKILL sk ON sk.SkillID = e.SkillID
      WHERE (e.TeacherID = ? OR e.LearnerID = ?) AND s.Status <> 'Cancelled' LIMIT 1`
   ).get(sid, sid);
-  const sessionsCount = db.prepare(
+  const sessionsCountRow = await db.prepare(
     `SELECT COUNT(*) AS c FROM SESSION s
      JOIN EXCHANGE e ON e.ExchangeID = s.ExchangeID
      WHERE (e.TeacherID = ? OR e.LearnerID = ?) AND s.Status <> 'Cancelled'`
-  ).get(sid, sid).c;
+  ).get(sid, sid);
+  const sessionsCount = sessionsCountRow ? sessionsCountRow.c : 0;
 
-  const fiveStarReviewsCount = db.prepare(
+  const fiveStarReviewsCountRow = await db.prepare(
     `SELECT COUNT(*) AS c FROM FEEDBACK f
      JOIN EXCHANGE e ON e.ExchangeID = f.ExchangeID
      WHERE e.TeacherID = ? AND f.Rating = 5`
-  ).get(sid).c;
+  ).get(sid);
+  const fiveStarReviewsCount = fiveStarReviewsCountRow ? fiveStarReviewsCountRow.c : 0;
 
-  const ratingInfo = teacherRating(sid);
+  const ratingInfo = await teacherRating(sid);
   const avgRating = ratingInfo.avgRating;
 
   const badgesToAward = [];
@@ -682,15 +694,15 @@ function checkAndAwardBadges(studentId) {
   }
 
   for (const b of badgesToAward) {
-    const badgeRow = db.prepare('SELECT Title FROM BADGE WHERE BadgeID = ?').get(b.badgeId);
+    const badgeRow = await db.prepare('SELECT Title FROM BADGE WHERE BadgeID = ?').get(b.badgeId);
     if (!badgeRow) continue;
     try {
-      db.prepare(
+      await db.prepare(
         `INSERT INTO STUDENT_BADGE (StudentID, BadgeID, EarnedAt, ActivityTrigger)
          VALUES (?, ?, datetime('now'), ?)`
       ).run(sid, b.badgeId, b.activityTrigger);
 
-      db.prepare(
+      await db.prepare(
         'INSERT INTO NOTIFICATION (StudentID, Type, Title, Message, Link, RelatedType, RelatedID) VALUES (?, ?, ?, ?, ?, ?, ?)'
       ).run(
         sid,
@@ -708,23 +720,28 @@ function checkAndAwardBadges(studentId) {
   }
 }
 
-function getStudentAchievements(studentId) {
+async function getStudentAchievements(studentId) {
   const sid = Number(studentId);
-  checkAndAwardBadges(sid);
+  await checkAndAwardBadges(sid);
 
-  const allBadges = db.prepare('SELECT * FROM BADGE ORDER BY Category, BadgeID').all();
-  const earnedRows = db.prepare('SELECT * FROM STUDENT_BADGE WHERE StudentID = ?').all(sid);
+  const allBadges = await db.prepare('SELECT * FROM BADGE ORDER BY Category, BadgeID').all();
+  const earnedRows = await db.prepare('SELECT * FROM STUDENT_BADGE WHERE StudentID = ?').all(sid);
   const earnedMap = new Map(earnedRows.map((r) => [r.BadgeID, r]));
 
-  const counts = sessionCounts(sid);
-  const offeredCount = db.prepare('SELECT COUNT(*) AS c FROM SKILL_OFFERED WHERE StudentID = ?').get(sid).c;
-  const wantedCount = db.prepare('SELECT COUNT(*) AS c FROM SKILL_WANTED WHERE StudentID = ?').get(sid).c;
-  const reviewsCount = db.prepare('SELECT COUNT(*) AS c FROM FEEDBACK f JOIN EXCHANGE e ON e.ExchangeID = f.ExchangeID WHERE e.TeacherID = ? AND f.Rating = 5').get(sid).c;
-  const matchesCount = db.prepare("SELECT COUNT(*) AS c FROM EXCHANGE WHERE (TeacherID = ? OR LearnerID = ?) AND Status <> 'Cancelled'").get(sid, sid).c;
-  const sessionsCount = db.prepare(
+  const counts = await sessionCounts(sid);
+  const offeredCountRow = await db.prepare('SELECT COUNT(*) AS c FROM SKILL_OFFERED WHERE StudentID = ?').get(sid);
+  const offeredCount = offeredCountRow ? offeredCountRow.c : 0;
+  const wantedCountRow = await db.prepare('SELECT COUNT(*) AS c FROM SKILL_WANTED WHERE StudentID = ?').get(sid);
+  const wantedCount = wantedCountRow ? wantedCountRow.c : 0;
+  const reviewsCountRow = await db.prepare('SELECT COUNT(*) AS c FROM FEEDBACK f JOIN EXCHANGE e ON e.ExchangeID = f.ExchangeID WHERE e.TeacherID = ? AND f.Rating = 5').get(sid);
+  const reviewsCount = reviewsCountRow ? reviewsCountRow.c : 0;
+  const matchesCountRow = await db.prepare("SELECT COUNT(*) AS c FROM EXCHANGE WHERE (TeacherID = ? OR LearnerID = ?) AND Status <> 'Cancelled'").get(sid, sid);
+  const matchesCount = matchesCountRow ? matchesCountRow.c : 0;
+  const sessionsCountRow = await db.prepare(
     `SELECT COUNT(*) AS c FROM SESSION s JOIN EXCHANGE e ON e.ExchangeID = s.ExchangeID WHERE (e.TeacherID = ? OR e.LearnerID = ?) AND s.Status <> 'Cancelled'`
-  ).get(sid, sid).c;
-  const ratingInfo = teacherRating(sid);
+  ).get(sid, sid);
+  const sessionsCount = sessionsCountRow ? sessionsCountRow.c : 0;
+  const ratingInfo = await teacherRating(sid);
   const rating = ratingInfo.avgRating || 0;
 
   return allBadges.map((b) => {
@@ -789,19 +806,22 @@ function getStudentAchievements(studentId) {
   });
 }
 
-function hydrateStudent(id) {
-  const student = getStudent(id);
-  const rating = teacherRating(id);
-  const counts = sessionCounts(id);
-  const offered = offeredRows(id).map((r) => mapOffered(r, id));
-  const wanted = wantedRows(id).map((r) => mapWanted(r, id));
-  const allSessions = db.prepare(`${SESSION_SELECT} WHERE e.TeacherID = ? OR e.LearnerID = ? ORDER BY s.SessionDate ASC`)
+async function hydrateStudent(id) {
+  const student = await getStudent(id);
+  const rating = await teacherRating(id);
+  const counts = await sessionCounts(id);
+  const offeredRaw = await offeredRows(id);
+  const offered = await Promise.all(offeredRaw.map((r) => mapOffered(r, id)));
+  const wantedRaw = await wantedRows(id);
+  const wanted = wantedRaw.map((r) => mapWanted(r, id));
+  const allSessions = await db.prepare(`${SESSION_SELECT} WHERE e.TeacherID = ? OR e.LearnerID = ? ORDER BY s.SessionDate ASC`)
     .all(id, id);
   const upcomingSessions = allSessions.filter((row) => isFutureSession(row)).map((row) => mapSession(row, id));
-  const availability = getAvailability(id);
-  const reviews = listFeedbackForStudent(id).map((row) => mapReview(row, id));
-  const power = computePowerLevel(id, counts.sessionsTaught, counts.sessionsAttended, offered.length);
-  const achievements = getStudentAchievements(id);
+  const availability = await getAvailability(id);
+  const feedbackRaw = await listFeedbackForStudent(id);
+  const reviews = await Promise.all(feedbackRaw.map((row) => mapReview(row, id)));
+  const power = await computePowerLevel(id, counts.sessionsTaught, counts.sessionsAttended, offered.length);
+  const achievements = await getStudentAchievements(id);
 
   const interests = student.Interests ? student.Interests.split(',').map((x) => x.trim()).filter(Boolean) : [];
   const languages = student.Languages ? student.Languages.split(',').map((x) => x.trim()).filter(Boolean) : [];
@@ -825,7 +845,9 @@ function hydrateStudent(id) {
     portfolioUrl: student.PortfolioUrl || '',
     interests,
     languages,
-    rating: rating.avgRating != null ? String(rating.avgRating) : '5.00',
+    rating: rating.reviews > 0 ? Number(rating.avgRating).toFixed(2) : null,
+    reviewsCount: rating.reviews || 0,
+    reviewCount: rating.reviews || 0,
     ...counts,
     ...power,
     offered,
@@ -844,15 +866,15 @@ function hydrateStudent(id) {
   };
 }
 
-function conversationsFor(studentId) {
+async function conversationsFor(studentId) {
   const me = Number(studentId);
-  const peers = db.prepare(
+  const peers = await db.prepare(
     `SELECT DISTINCT CASE WHEN SenderID = ? THEN ReceiverID ELSE SenderID END AS PeerID
      FROM MESSAGE WHERE SenderID = ? OR ReceiverID = ?`
   ).all(me, me, me);
-  return peers.map((p) => {
-    const peer = getStudent(p.PeerID);
-    const messages = db.prepare(
+  const convList = await Promise.all(peers.map(async (p) => {
+    const peer = await getStudent(p.PeerID);
+    const messages = await db.prepare(
       `SELECT m.*, s.Name AS SenderName FROM MESSAGE m
        JOIN STUDENT s ON s.StudentID = m.SenderID
        WHERE (m.SenderID = ? AND m.ReceiverID = ?) OR (m.SenderID = ? AND m.ReceiverID = ?)
@@ -863,6 +885,7 @@ function conversationsFor(studentId) {
     return {
       id: `conv-${p.PeerID}`,
       peerId: p.PeerID,
+      peerStudentId: displayStudentId(p.PeerID),
       peerName: peer.Name,
       peerDept: [peer.Department, peer.YearOfStudy].filter(Boolean).join(' • '),
       peerAvatar: peer.Avatar || initials(peer.Name),
@@ -880,7 +903,8 @@ function conversationsFor(studentId) {
         isMine: m.SenderID === me,
       })),
     };
-  }).sort((a, b) => String(b.lastActive).localeCompare(String(a.lastActive)));
+  }));
+  return convList.sort((a, b) => String(b.lastActive).localeCompare(String(a.lastActive)));
 }
 
 // =============================================================================
@@ -891,7 +915,7 @@ function conversationsFor(studentId) {
 route('GET', '/api/health', () => ({ status: 'ok', timestamp: new Date().toISOString() }));
 
 // ---------- auth / students ----------
-route('POST', '/api/register', (req, body) => {
+route('POST', '/api/register', async (req, body) => {
   required(body, 'name', 'email', 'password');
   const normalizedEmail = String(body.email).trim().toLowerCase();
   const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
@@ -902,7 +926,7 @@ route('POST', '/api/register', (req, body) => {
   const interests = Array.isArray(body.interests) ? body.interests.join(', ') : (body.interests ?? null);
   const languages = Array.isArray(body.languages) ? body.languages.join(', ') : (body.languages ?? null);
 
-  const r = db.prepare(
+  const r = await db.prepare(
     `INSERT INTO STUDENT (
       Name, Email, Department, YearOfStudy, Bio, HostelBlock, RoomNo, Password,
       Avatar, Phone, GithubUrl, LinkedinUrl, PortfolioUrl, Interests, Languages
@@ -917,31 +941,33 @@ route('POST', '/api/register', (req, body) => {
   );
   const newStudentId = r.lastInsertRowid;
   const token = createToken(newStudentId, normalizedEmail);
-  return [201, { token, ...hydrateStudent(newStudentId) }];
+  const hydrated = await hydrateStudent(newStudentId);
+  return [201, { token, ...hydrated }];
 });
 
-route('POST', '/api/login', (req, body) => {
+route('POST', '/api/login', async (req, body) => {
   required(body, 'email', 'password');
   const normalizedEmail = String(body.email).trim().toLowerCase();
   const ip = getClientIp(req);
 
   checkLoginRateLimit(normalizedEmail, ip);
 
-  const s = db.prepare('SELECT * FROM STUDENT WHERE lower(Email) = lower(?)').get(normalizedEmail);
+  const s = await db.prepare('SELECT * FROM STUDENT WHERE lower(Email) = lower(?)').get(normalizedEmail);
   if (!s || !verifyPassword(body.password, s.Password)) {
     recordLoginFailure(normalizedEmail, ip);
     throw new HttpError(401, 'Invalid email or password');
   }
 
   clearLoginFailures(normalizedEmail, ip);
-  touchStudentLastSeen(s.StudentID);
+  await touchStudentLastSeen(s.StudentID);
   const token = createToken(s.StudentID, s.Email);
-  return { token, ...hydrateStudent(s.StudentID) };
+  const hydrated = await hydrateStudent(s.StudentID);
+  return { token, ...hydrated };
 });
 
-route('GET', '/api/students', () => {
-  const students = db.prepare(`SELECT ${PUBLIC_STUDENT_COLS} FROM STUDENT ORDER BY Name`).all();
-  const allOffered = db.prepare(
+route('GET', '/api/students', async () => {
+  const students = await db.prepare(`SELECT ${PUBLIC_STUDENT_COLS} FROM STUDENT ORDER BY Name`).all();
+  const allOffered = await db.prepare(
     `SELECT so.StudentID, sk.SkillName FROM SKILL_OFFERED so
      JOIN SKILL sk ON sk.SkillID = so.SkillID`
   ).all();
@@ -951,25 +977,47 @@ route('GET', '/api/students', () => {
     skillsByStudent[row.StudentID].push(row.SkillName);
   }
 
-  return students.map((s) => ({
-    ...s,
-    id: s.StudentID,
-    studentId: displayStudentId(s.StudentID),
-    name: s.Name,
-    department: s.Department,
-    year: s.YearOfStudy,
-    avatar: s.Avatar || initials(s.Name),
-    avatarBg: avatarBg(s.StudentID),
-    isOnline: isStudentOnline(s.LastSeenAt),
-    onlineStatus: isStudentOnline(s.LastSeenAt) ? 'online' : 'offline',
-    skills: (skillsByStudent[s.StudentID] || []).join(', '),
-    skillsOffered: skillsByStudent[s.StudentID] || [],
-  }));
+  const allRatings = await db.prepare(
+    `SELECT e.TeacherID, ROUND(AVG(f.Rating), 2) AS AvgRating, COUNT(f.FeedbackID) AS Reviews
+     FROM EXCHANGE e
+     JOIN FEEDBACK f ON f.ExchangeID = e.ExchangeID AND f.GivenBy = e.LearnerID
+     GROUP BY e.TeacherID`
+  ).all();
+  const ratingsByTeacher = {};
+  for (const r of allRatings) {
+    ratingsByTeacher[r.TeacherID] = {
+      avgRating: r.AvgRating != null ? Number(r.AvgRating) : null,
+      reviews: r.Reviews || 0,
+    };
+  }
+
+  return students.map((s) => {
+    const rInfo = ratingsByTeacher[s.StudentID];
+    const reviews = rInfo?.reviews || 0;
+    const rating = (reviews > 0 && rInfo?.avgRating != null) ? Number(rInfo.avgRating).toFixed(2) : null;
+    return {
+      ...s,
+      id: s.StudentID,
+      studentId: displayStudentId(s.StudentID),
+      name: s.Name,
+      department: s.Department,
+      year: s.YearOfStudy,
+      avatar: s.Avatar || initials(s.Name),
+      avatarBg: avatarBg(s.StudentID),
+      isOnline: isStudentOnline(s.LastSeenAt),
+      onlineStatus: isStudentOnline(s.LastSeenAt) ? 'online' : 'offline',
+      rating,
+      reviewsCount: reviews,
+      reviewCount: reviews,
+      skills: (skillsByStudent[s.StudentID] || []).join(', '),
+      skillsOffered: skillsByStudent[s.StudentID] || [],
+    };
+  });
 });
 
-route('GET', '/api/students/:id', (req, body, p) => {
+route('GET', '/api/students/:id', async (req, body, p) => {
   const targetId = Number(p.id);
-  const hydrated = hydrateStudent(targetId);
+  const hydrated = await hydrateStudent(targetId);
   if (req.user && req.user.studentId === targetId) {
     return hydrated;
   }
@@ -983,16 +1031,16 @@ route('GET', '/api/students/:id', (req, body, p) => {
   return pub;
 });
 
-route('PATCH', '/api/students/:id', (req, body, p) => {
+route('PATCH', '/api/students/:id', async (req, body, p) => {
   const targetId = Number(p.id);
   if (!req.user || req.user.studentId !== targetId) {
     throw new HttpError(403, 'Forbidden');
   }
-  const cur = getStudent(targetId);
+  const cur = await getStudent(targetId);
   const interests = Array.isArray(body.interests) ? body.interests.join(', ') : (body.interests ?? cur.Interests);
   const languages = Array.isArray(body.languages) ? body.languages.join(', ') : (body.languages ?? cur.Languages);
 
-  db.prepare(
+  await db.prepare(
     `UPDATE STUDENT SET
        Name=?, Email=?, Department=?, YearOfStudy=?, Bio=?, HostelBlock=?, RoomNo=?,
        Avatar=?, Phone=?, GithubUrl=?, LinkedinUrl=?, PortfolioUrl=?, Interests=?, Languages=?
@@ -1016,25 +1064,27 @@ route('PATCH', '/api/students/:id', (req, body, p) => {
   );
   if (body.skillMasterShown !== undefined || body.SkillMasterShown !== undefined) {
     const val = (body.skillMasterShown ?? body.SkillMasterShown) ? 1 : 0;
-    db.prepare('UPDATE STUDENT SET SkillMasterShown = ? WHERE StudentID = ?').run(val, targetId);
+    await db.prepare('UPDATE STUDENT SET SkillMasterShown = ? WHERE StudentID = ?').run(val, targetId);
   }
-  return hydrateStudent(targetId);
+  return await hydrateStudent(targetId);
 });
 
 // ---------- leaderboard ----------
-route('GET', '/api/leaderboard', () => {
-  const students = db.prepare('SELECT StudentID, Name, Department, YearOfStudy, Avatar, SkillMasterShown FROM STUDENT').all();
-  const list = students.map((s) => {
-    const rating = teacherRating(s.StudentID);
-    const counts = sessionCounts(s.StudentID);
-    const offered = db.prepare('SELECT COUNT(*) AS c FROM SKILL_OFFERED WHERE StudentID = ?').get(s.StudentID).c;
-    const power = computePowerLevel(s.StudentID, counts.sessionsTaught, counts.sessionsAttended, offered);
+route('GET', '/api/leaderboard', async () => {
+  const students = await db.prepare('SELECT StudentID, Name, Department, YearOfStudy, Avatar, SkillMasterShown FROM STUDENT').all();
+  const list = await Promise.all(students.map(async (s) => {
+    const rating = await teacherRating(s.StudentID);
+    const counts = await sessionCounts(s.StudentID);
+    const offeredRow = await db.prepare('SELECT COUNT(*) AS c FROM SKILL_OFFERED WHERE StudentID = ?').get(s.StudentID);
+    const offered = offeredRow ? offeredRow.c : 0;
+    const power = await computePowerLevel(s.StudentID, counts.sessionsTaught, counts.sessionsAttended, offered);
     const teachingReviewsCount = rating.reviews || 0;
-    const teachingRating = rating.avgRating != null ? rating.avgRating : 0;
+    const teachingRating = (teachingReviewsCount > 0 && rating.avgRating != null) ? Number(rating.avgRating) : null;
     const badgesCount = power.badgeCount;
 
     // Leaderboard formula: Score = (badgesCount * 15) + (teachingRating * 12) + (min(teachingReviewsCount, 20) * 2)
-    const rawScore = (badgesCount * 15) + (teachingRating * 12) + (Math.min(teachingReviewsCount, 20) * 2);
+    // A student with zero reviews gets 0 rating points:
+    const rawScore = (badgesCount * 15) + (teachingReviewsCount > 0 ? ((teachingRating || 0) * 12) : 0) + (Math.min(teachingReviewsCount, 20) * 2);
     const finalScore = Math.round(rawScore * 10) / 10;
 
     return {
@@ -1046,10 +1096,11 @@ route('GET', '/api/leaderboard', () => {
       year: s.YearOfStudy,
       avatar: s.Avatar || initials(s.Name),
       avatarBg: avatarBg(s.StudentID),
-      rating: rating.avgRating != null ? String(rating.avgRating) : '5.00',
+      rating: teachingReviewsCount > 0 ? Number(teachingRating).toFixed(2) : null,
       teachingRating,
       teachingReviewsCount,
       reviewsCount: teachingReviewsCount,
+      reviewCount: teachingReviewsCount,
       sessionsTaught: counts.sessionsTaught,
       sessionsLearnt: counts.sessionsAttended,
       sessionsAttended: counts.sessionsAttended,
@@ -1061,11 +1112,13 @@ route('GET', '/api/leaderboard', () => {
       score: finalScore,
       isSkillMaster: badgesCount >= 8,
     };
-  });
+  }));
 
   list.sort((a, b) => {
     if (b.score !== a.score) return b.score - a.score;
-    if (b.teachingRating !== a.teachingRating) return b.teachingRating - a.teachingRating;
+    const bRate = b.teachingRating != null ? b.teachingRating : -1;
+    const aRate = a.teachingRating != null ? a.teachingRating : -1;
+    if (bRate !== aRate) return bRate - aRate;
     if (b.teachingReviewsCount !== a.teachingReviewsCount) return b.teachingReviewsCount - a.teachingReviewsCount;
     if (b.badgesCount !== a.badgesCount) return b.badgesCount - a.badgesCount;
     return a.id - b.id;
@@ -1075,11 +1128,11 @@ route('GET', '/api/leaderboard', () => {
 });
 
 // ---------- badges ----------
-route('GET', '/api/students/:id/badges', (req, body, p) => {
+route('GET', '/api/students/:id/badges', async (req, body, p) => {
   const targetId = Number(p.id);
   if (!req.user || req.user.studentId !== targetId) throw new HttpError(403, 'Forbidden');
-  getStudent(targetId);
-  return getStudentAchievements(targetId);
+  await getStudent(targetId);
+  return await getStudentAchievements(targetId);
 });
 
 route('POST', '/api/students/:id/badges/award', () => {
@@ -1090,40 +1143,40 @@ route('POST', '/api/students/:id/badges', () => {
 });
 
 // ---------- notifications ----------
-route('GET', '/api/students/:id/notifications', (req, body, p) => {
+route('GET', '/api/students/:id/notifications', async (req, body, p) => {
   const targetId = Number(p.id);
   if (!req.user || req.user.studentId !== targetId) throw new HttpError(403, 'Forbidden');
-  touchStudentLastSeen(targetId);
-  getStudent(targetId);
-  return db.prepare('SELECT * FROM NOTIFICATION WHERE StudentID = ? ORDER BY NotificationID DESC').all(targetId);
+  await touchStudentLastSeen(targetId);
+  await getStudent(targetId);
+  return await db.prepare('SELECT * FROM NOTIFICATION WHERE StudentID = ? ORDER BY NotificationID DESC').all(targetId);
 });
 
-route('GET', '/api/students/:id/notifications/unread-count', (req, body, p) => {
+route('GET', '/api/students/:id/notifications/unread-count', async (req, body, p) => {
   const targetId = Number(p.id);
   if (!req.user || req.user.studentId !== targetId) throw new HttpError(403, 'Forbidden');
-  touchStudentLastSeen(targetId);
-  getStudent(targetId);
-  const row = db.prepare('SELECT COUNT(*) AS c FROM NOTIFICATION WHERE StudentID = ? AND IsRead = 0').get(targetId);
+  await touchStudentLastSeen(targetId);
+  await getStudent(targetId);
+  const row = await db.prepare('SELECT COUNT(*) AS c FROM NOTIFICATION WHERE StudentID = ? AND IsRead = 0').get(targetId);
   const count = row ? row.c : 0;
   return { count, unreadCount: count };
 });
 
-route('PATCH', '/api/students/:id/notifications/read-all', (req, body, p) => {
+route('PATCH', '/api/students/:id/notifications/read-all', async (req, body, p) => {
   const targetId = Number(p.id);
   if (!req.user || req.user.studentId !== targetId) throw new HttpError(403, 'Forbidden');
-  touchStudentLastSeen(targetId);
-  getStudent(targetId);
-  const r = db.prepare('UPDATE NOTIFICATION SET IsRead = 1 WHERE StudentID = ? AND IsRead = 0').run(targetId);
+  await touchStudentLastSeen(targetId);
+  await getStudent(targetId);
+  const r = await db.prepare('UPDATE NOTIFICATION SET IsRead = 1 WHERE StudentID = ? AND IsRead = 0').run(targetId);
   return { ok: true, markedCount: r.changes };
 });
 
-route('PATCH', '/api/notifications/:id/read', (req, body, p) => {
-  const notif = db.prepare('SELECT * FROM NOTIFICATION WHERE NotificationID = ?').get(p.id);
+route('PATCH', '/api/notifications/:id/read', async (req, body, p) => {
+  const notif = await db.prepare('SELECT * FROM NOTIFICATION WHERE NotificationID = ?').get(p.id);
   if (!notif) throw notFound('Notification not found');
   if (!req.user || Number(notif.StudentID) !== req.user.studentId) throw new HttpError(403, 'Forbidden');
-  touchStudentLastSeen(req.user.studentId);
-  db.prepare('UPDATE NOTIFICATION SET IsRead = 1 WHERE NotificationID = ?').run(p.id);
-  return db.prepare('SELECT * FROM NOTIFICATION WHERE NotificationID = ?').get(p.id);
+  await touchStudentLastSeen(req.user.studentId);
+  await db.prepare('UPDATE NOTIFICATION SET IsRead = 1 WHERE NotificationID = ?').run(p.id);
+  return await db.prepare('SELECT * FROM NOTIFICATION WHERE NotificationID = ?').get(p.id);
 });
 
 route('POST', '/api/notifications', () => {
@@ -1131,24 +1184,24 @@ route('POST', '/api/notifications', () => {
 });
 
 // ---------- skills ----------
-route('GET', '/api/skills', (req, body, p, q) => {
+route('GET', '/api/skills', async (req, body, p, q) => {
   if (q.get('category')) {
-    return db.prepare('SELECT * FROM SKILL WHERE Category = ? ORDER BY SkillName').all(q.get('category'));
+    return await db.prepare('SELECT * FROM SKILL WHERE Category = ? ORDER BY SkillName').all(q.get('category'));
   }
-  return db.prepare('SELECT * FROM SKILL ORDER BY SkillName').all();
+  return await db.prepare('SELECT * FROM SKILL ORDER BY SkillName').all();
 });
 
-route('POST', '/api/skills', (req, body) => {
+route('POST', '/api/skills', async (req, body) => {
   required(body, 'skillName');
-  const r = db.prepare('INSERT INTO SKILL (SkillName, Category) VALUES (?,?)')
+  const r = await db.prepare('INSERT INTO SKILL (SkillName, Category) VALUES (?,?)')
     .run(body.skillName, body.category ?? null);
-  return [201, db.prepare('SELECT * FROM SKILL WHERE SkillID = ?').get(r.lastInsertRowid)];
+  return [201, await db.prepare('SELECT * FROM SKILL WHERE SkillID = ?').get(r.lastInsertRowid)];
 });
 
-route('GET', '/api/explore', (req, body, p, q) => {
+route('GET', '/api/explore', async (req, body, p, q) => {
   const category = q.get('category');
   const search = (q.get('q') || '').trim().toLowerCase();
-  let rows = db.prepare(
+  let rows = await db.prepare(
     `SELECT so.StudentID, so.SkillID, so.ProficiencyLevel, so.Description, so.Availability,
             so.Tags, so.SampleTopics, so.YearsOfExperience,
             sk.SkillName, sk.Category, st.Name, st.Department, st.YearOfStudy, st.Avatar
@@ -1167,9 +1220,10 @@ route('GET', '/api/explore', (req, body, p, q) => {
       )
     );
   }
-  return rows.map((r) => {
-    const rating = teacherRating(r.StudentID);
-    const taught = sessionCounts(r.StudentID).sessionsTaught;
+  return await Promise.all(rows.map(async (r) => {
+    const rating = await teacherRating(r.StudentID);
+    const countData = await sessionCounts(r.StudentID);
+    const taught = countData.sessionsTaught;
     const avail = r.Availability || 'Flexible';
     let availabilityType = 'Flexible';
     if (/weekend/i.test(avail)) availabilityType = 'Weekends';
@@ -1192,7 +1246,10 @@ route('GET', '/api/explore', (req, body, p, q) => {
       mentorDept: [r.Department, r.YearOfStudy].filter(Boolean).join(' • '),
       mentorAvatar: r.Avatar || initials(r.Name),
       avatarBg: avatarBg(r.StudentID),
-      mentorRating: rating.avgRating != null ? String(rating.avgRating) : '5.0',
+      mentorRating: rating.reviews > 0 ? Number(rating.avgRating).toFixed(2) : null,
+      rating: rating.reviews > 0 ? Number(rating.avgRating).toFixed(2) : null,
+      reviewsCount: rating.reviews || 0,
+      reviewCount: rating.reviews || 0,
       sessionsDelivered: taught,
       description: r.Description || r.SkillName,
       availability: avail,
@@ -1201,28 +1258,29 @@ route('GET', '/api/explore', (req, body, p, q) => {
       topics,
       yearsOfExperience: r.YearsOfExperience || 1,
     };
-  });
+  }));
 });
 
 // ---------- offered / wanted ----------
-route('GET', '/api/students/:id/offered', (req, body, p) => {
+route('GET', '/api/students/:id/offered', async (req, body, p) => {
   const targetId = Number(p.id);
   if (!req.user || req.user.studentId !== targetId) throw new HttpError(403, 'Forbidden');
-  getStudent(targetId);
-  return offeredRows(targetId).map((r) => mapOffered(r, targetId));
+  await getStudent(targetId);
+  const rows = await offeredRows(targetId);
+  return await Promise.all(rows.map((r) => mapOffered(r, targetId)));
 });
 
-route('POST', '/api/students/:id/offered', (req, body, p) => {
+route('POST', '/api/students/:id/offered', async (req, body, p) => {
   const targetId = Number(p.id);
   if (!req.user || req.user.studentId !== targetId) throw new HttpError(403, 'Forbidden');
-  getStudent(targetId);
-  const skill = resolveSkill(body);
+  await getStudent(targetId);
+  const skill = await resolveSkill(body);
   const level = normalizeLevel(body.level, 'Intermediate');
   const tags = Array.isArray(body.tags) ? body.tags.join(', ') : (body.tags ?? null);
   const topics = Array.isArray(body.sampleTopics) ? body.sampleTopics.join(', ') : (body.sampleTopics ?? null);
   const exp = body.yearsOfExperience ? Number(body.yearsOfExperience) : 1;
 
-  db.prepare(
+  await db.prepare(
     `INSERT INTO SKILL_OFFERED (
       StudentID, SkillID, ProficiencyLevel, Description, Availability, Tags, SampleTopics, YearsOfExperience
     ) VALUES (?,?,?,?,?,?,?,?)
@@ -1235,19 +1293,18 @@ route('POST', '/api/students/:id/offered', (req, body, p) => {
       YearsOfExperience = COALESCE(excluded.YearsOfExperience, SKILL_OFFERED.YearsOfExperience)`
   ).run(targetId, skill.SkillID, level, body.description ?? body.Description ?? null, body.availability ?? null, tags, topics, exp);
 
-  checkAndAwardBadges(targetId);
+  await checkAndAwardBadges(targetId);
 
-  return [201, mapOffered(
-    offeredRows(targetId).find((r) => r.SkillID === skill.SkillID),
-    targetId
-  )];
+  const freshOffered = await offeredRows(targetId);
+  const targetRow = freshOffered.find((r) => r.SkillID === skill.SkillID);
+  return [201, await mapOffered(targetRow, targetId)];
 });
 
-route('PATCH', '/api/students/:id/offered/:skillId', (req, body, p) => {
+route('PATCH', '/api/students/:id/offered/:skillId', async (req, body, p) => {
   const targetId = Number(p.id);
   if (!req.user || req.user.studentId !== targetId) throw new HttpError(403, 'Forbidden');
-  getStudent(targetId);
-  const cur = db.prepare('SELECT * FROM SKILL_OFFERED WHERE StudentID=? AND SkillID=?').get(targetId, p.skillId);
+  await getStudent(targetId);
+  const cur = await db.prepare('SELECT * FROM SKILL_OFFERED WHERE StudentID=? AND SkillID=?').get(targetId, p.skillId);
   if (!cur) throw notFound('Entry not found');
   let skillId = Number(p.skillId);
   const tags = Array.isArray(body.tags) ? body.tags.join(', ') : (body.tags ?? cur.Tags);
@@ -1255,11 +1312,11 @@ route('PATCH', '/api/students/:id/offered/:skillId', (req, body, p) => {
   const exp = body.yearsOfExperience ? Number(body.yearsOfExperience) : cur.YearsOfExperience;
 
   if (body.skillName) {
-    const skill = findOrCreateSkill(body.skillName, body.category);
+    const skill = await findOrCreateSkill(body.skillName, body.category);
     if (skill.SkillID !== skillId) {
-      db.prepare('DELETE FROM SKILL_OFFERED WHERE StudentID=? AND SkillID=?').run(targetId, skillId);
+      await db.prepare('DELETE FROM SKILL_OFFERED WHERE StudentID=? AND SkillID=?').run(targetId, skillId);
       skillId = skill.SkillID;
-      db.prepare(
+      await db.prepare(
         `INSERT INTO SKILL_OFFERED (
           StudentID, SkillID, ProficiencyLevel, Description, Availability, Tags, SampleTopics, YearsOfExperience
         ) VALUES (?,?,?,?,?,?,?,?)`
@@ -1270,11 +1327,12 @@ route('PATCH', '/api/students/:id/offered/:skillId', (req, body, p) => {
         body.availability ?? cur.Availability,
         tags, topics, exp
       );
-      return mapOffered(offeredRows(targetId).find((r) => r.SkillID === skillId), targetId);
+      const freshOffered = await offeredRows(targetId);
+      return await mapOffered(freshOffered.find((r) => r.SkillID === skillId), targetId);
     }
   }
 
-  db.prepare(
+  await db.prepare(
     `UPDATE SKILL_OFFERED SET
        ProficiencyLevel=?, Description=?, Availability=?, Tags=?, SampleTopics=?, YearsOfExperience=?
      WHERE StudentID=? AND SkillID=?`
@@ -1285,36 +1343,37 @@ route('PATCH', '/api/students/:id/offered/:skillId', (req, body, p) => {
     tags, topics, exp,
     targetId, skillId
   );
-  return mapOffered(offeredRows(targetId).find((r) => r.SkillID === skillId), targetId);
+  const freshOffered = await offeredRows(targetId);
+  return await mapOffered(freshOffered.find((r) => r.SkillID === skillId), targetId);
 });
 
-route('DELETE', '/api/students/:id/offered/:skillId', (req, body, p) => {
+route('DELETE', '/api/students/:id/offered/:skillId', async (req, body, p) => {
   const targetId = Number(p.id);
   if (!req.user || req.user.studentId !== targetId) throw new HttpError(403, 'Forbidden');
   const skillId = Number(p.skillId);
-  const cur = db.prepare('SELECT * FROM SKILL_OFFERED WHERE StudentID = ? AND SkillID = ?').get(targetId, skillId);
+  const cur = await db.prepare('SELECT * FROM SKILL_OFFERED WHERE StudentID = ? AND SkillID = ?').get(targetId, skillId);
   if (!cur) throw notFound('Entry not found');
 
-  const acceptedExchanges = db.prepare(
+  const acceptedExchanges = await db.prepare(
     "SELECT ExchangeID FROM EXCHANGE WHERE (TeacherID = ? OR LearnerID = ?) AND SkillID = ? AND Status = 'Accepted'"
   ).all(targetId, targetId, skillId);
   for (const ex of acceptedExchanges) {
-    const sessions = db.prepare("SELECT * FROM SESSION WHERE ExchangeID = ? AND Status = 'Scheduled'").all(ex.ExchangeID);
+    const sessions = await db.prepare("SELECT * FROM SESSION WHERE ExchangeID = ? AND Status = 'Scheduled'").all(ex.ExchangeID);
     if (sessions.some((s) => isFutureSession(s))) {
       throw new HttpError(409, 'You have upcoming sessions for this skill. Cancel them in Sessions first.');
     }
   }
 
-  const deleter = getStudent(targetId);
-  const skillRow = db.prepare('SELECT SkillName FROM SKILL WHERE SkillID = ?').get(skillId);
+  const deleter = await getStudent(targetId);
+  const skillRow = await db.prepare('SELECT SkillName FROM SKILL WHERE SkillID = ?').get(skillId);
   const skillName = skillRow?.SkillName || 'this skill';
 
-  const pendingExchanges = db.prepare(
+  const pendingExchanges = await db.prepare(
     "SELECT * FROM EXCHANGE WHERE TeacherID = ? AND SkillID = ? AND Status = 'Pending'"
   ).all(targetId, skillId);
   for (const ex of pendingExchanges) {
-    db.prepare("UPDATE EXCHANGE SET Status = 'Cancelled' WHERE ExchangeID = ?").run(ex.ExchangeID);
-    db.prepare(
+    await db.prepare("UPDATE EXCHANGE SET Status = 'Cancelled' WHERE ExchangeID = ?").run(ex.ExchangeID);
+    await db.prepare(
       'INSERT INTO NOTIFICATION (StudentID, Type, Title, Message, Link, RelatedType, RelatedID) VALUES (?, ?, ?, ?, ?, ?, ?)'
     ).run(
       ex.LearnerID,
@@ -1327,29 +1386,30 @@ route('DELETE', '/api/students/:id/offered/:skillId', (req, body, p) => {
     );
   }
 
-  const r = db.prepare('DELETE FROM SKILL_OFFERED WHERE StudentID = ? AND SkillID = ?').run(targetId, skillId);
+  const r = await db.prepare('DELETE FROM SKILL_OFFERED WHERE StudentID = ? AND SkillID = ?').run(targetId, skillId);
   if (!r.changes) throw notFound('Entry not found');
   return [204];
 });
 
-route('GET', '/api/students/:id/wanted', (req, body, p) => {
+route('GET', '/api/students/:id/wanted', async (req, body, p) => {
   const targetId = Number(p.id);
   if (!req.user || req.user.studentId !== targetId) throw new HttpError(403, 'Forbidden');
-  getStudent(targetId);
-  return wantedRows(targetId).map((r) => mapWanted(r, targetId));
+  await getStudent(targetId);
+  const rows = await wantedRows(targetId);
+  return rows.map((r) => mapWanted(r, targetId));
 });
 
-route('POST', '/api/students/:id/wanted', (req, body, p) => {
+route('POST', '/api/students/:id/wanted', async (req, body, p) => {
   const targetId = Number(p.id);
   if (!req.user || req.user.studentId !== targetId) throw new HttpError(403, 'Forbidden');
-  getStudent(targetId);
-  const skill = resolveSkill(body);
+  await getStudent(targetId);
+  const skill = await resolveSkill(body);
   const level = normalizeLevel(body.level || body.desiredLevel || body.preferredLevel, 'Beginner');
   const priority = ['High', 'Medium', 'Low'].includes(body.priority) ? body.priority : 'Medium';
   const targetGoal = body.targetGoal || body.learningGoal || body.description || null;
   const prefAvail = body.preferredAvailability || body.availability || null;
 
-  db.prepare(
+  await db.prepare(
     `INSERT INTO SKILL_WANTED (
       StudentID, SkillID, DesiredLevel, Description, Priority, PreferredAvailability, TargetGoal
     ) VALUES (?,?,?,?,?,?,?)
@@ -1361,21 +1421,22 @@ route('POST', '/api/students/:id/wanted', (req, body, p) => {
       TargetGoal = COALESCE(excluded.TargetGoal, SKILL_WANTED.TargetGoal)`
   ).run(targetId, skill.SkillID, level, body.description ?? targetGoal ?? null, priority, prefAvail, targetGoal);
 
-  checkAndAwardBadges(targetId);
+  await checkAndAwardBadges(targetId);
 
-  return [201, wantedRows(targetId).map((r) => mapWanted(r, targetId)).find((r) => r.SkillID === skill.SkillID)];
+  const freshWanted = await wantedRows(targetId);
+  return [201, freshWanted.map((r) => mapWanted(r, targetId)).find((r) => r.SkillID === skill.SkillID)];
 });
 
-route('PATCH', '/api/students/:id/wanted/:skillId', (req, body, p) => {
+route('PATCH', '/api/students/:id/wanted/:skillId', async (req, body, p) => {
   const targetId = Number(p.id);
   if (!req.user || req.user.studentId !== targetId) throw new HttpError(403, 'Forbidden');
-  getStudent(targetId);
-  const cur = db.prepare('SELECT * FROM SKILL_WANTED WHERE StudentID=? AND SkillID=?').get(targetId, p.skillId);
+  await getStudent(targetId);
+  const cur = await db.prepare('SELECT * FROM SKILL_WANTED WHERE StudentID=? AND SkillID=?').get(targetId, p.skillId);
   if (!cur) throw notFound('Entry not found');
   const targetGoal = body.targetGoal || body.learningGoal || body.description || cur.TargetGoal;
   const prefAvail = body.preferredAvailability || body.availability || cur.PreferredAvailability;
 
-  db.prepare(
+  await db.prepare(
     `UPDATE SKILL_WANTED SET
        DesiredLevel=?, Description=?, Priority=?, PreferredAvailability=?, TargetGoal=?
      WHERE StudentID=? AND SkillID=?`
@@ -1387,36 +1448,37 @@ route('PATCH', '/api/students/:id/wanted/:skillId', (req, body, p) => {
     targetGoal,
     targetId, p.skillId
   );
-  return wantedRows(targetId).map((r) => mapWanted(r, targetId)).find((r) => r.SkillID === Number(p.skillId));
+  const freshWanted = await wantedRows(targetId);
+  return freshWanted.map((r) => mapWanted(r, targetId)).find((r) => r.SkillID === Number(p.skillId));
 });
 
-route('DELETE', '/api/students/:id/wanted/:skillId', (req, body, p) => {
+route('DELETE', '/api/students/:id/wanted/:skillId', async (req, body, p) => {
   const targetId = Number(p.id);
   if (!req.user || req.user.studentId !== targetId) throw new HttpError(403, 'Forbidden');
   const skillId = Number(p.skillId);
-  const cur = db.prepare('SELECT * FROM SKILL_WANTED WHERE StudentID = ? AND SkillID = ?').get(targetId, skillId);
+  const cur = await db.prepare('SELECT * FROM SKILL_WANTED WHERE StudentID = ? AND SkillID = ?').get(targetId, skillId);
   if (!cur) throw notFound('Entry not found');
 
-  const acceptedExchanges = db.prepare(
+  const acceptedExchanges = await db.prepare(
     "SELECT ExchangeID FROM EXCHANGE WHERE (TeacherID = ? OR LearnerID = ?) AND SkillID = ? AND Status = 'Accepted'"
   ).all(targetId, targetId, skillId);
   for (const ex of acceptedExchanges) {
-    const sessions = db.prepare("SELECT * FROM SESSION WHERE ExchangeID = ? AND Status = 'Scheduled'").all(ex.ExchangeID);
+    const sessions = await db.prepare("SELECT * FROM SESSION WHERE ExchangeID = ? AND Status = 'Scheduled'").all(ex.ExchangeID);
     if (sessions.some((s) => isFutureSession(s))) {
       throw new HttpError(409, 'You have upcoming sessions for this skill. Cancel them in Sessions first.');
     }
   }
 
-  const deleter = getStudent(targetId);
-  const skillRow = db.prepare('SELECT SkillName FROM SKILL WHERE SkillID = ?').get(skillId);
+  const deleter = await getStudent(targetId);
+  const skillRow = await db.prepare('SELECT SkillName FROM SKILL WHERE SkillID = ?').get(skillId);
   const skillName = skillRow?.SkillName || 'this skill';
 
-  const pendingExchanges = db.prepare(
+  const pendingExchanges = await db.prepare(
     "SELECT * FROM EXCHANGE WHERE LearnerID = ? AND SkillID = ? AND Status = 'Pending'"
   ).all(targetId, skillId);
   for (const ex of pendingExchanges) {
-    db.prepare("UPDATE EXCHANGE SET Status = 'Cancelled' WHERE ExchangeID = ?").run(ex.ExchangeID);
-    db.prepare(
+    await db.prepare("UPDATE EXCHANGE SET Status = 'Cancelled' WHERE ExchangeID = ?").run(ex.ExchangeID);
+    await db.prepare(
       'INSERT INTO NOTIFICATION (StudentID, Type, Title, Message, Link, RelatedType, RelatedID) VALUES (?, ?, ?, ?, ?, ?, ?)'
     ).run(
       ex.TeacherID,
@@ -1429,45 +1491,48 @@ route('DELETE', '/api/students/:id/wanted/:skillId', (req, body, p) => {
     );
   }
 
-  const r = db.prepare('DELETE FROM SKILL_WANTED WHERE StudentID = ? AND SkillID = ?').run(targetId, skillId);
+  const r = await db.prepare('DELETE FROM SKILL_WANTED WHERE StudentID = ? AND SkillID = ?').run(targetId, skillId);
   if (!r.changes) throw notFound('Entry not found');
   return [204];
 });
 
-route('GET', '/api/students/:id/requests', (req, body, p) => {
+route('GET', '/api/students/:id/requests', async (req, body, p) => {
   const targetId = Number(p.id);
   if (!req.user || req.user.studentId !== targetId) throw new HttpError(403, 'Forbidden');
-  getStudent(targetId);
-  return wantedRows(targetId).map((r) => mapWanted(r, targetId));
+  await getStudent(targetId);
+  const rows = await wantedRows(targetId);
+  return rows.map((r) => mapWanted(r, targetId));
 });
 
 // ---------- matching ----------
-route('GET', '/api/students/:id/matches', (req, body, p) => {
+route('GET', '/api/students/:id/matches', async (req, body, p) => {
   const targetId = Number(p.id);
   if (!req.user || req.user.studentId !== targetId) throw new HttpError(403, 'Forbidden');
-  getStudent(targetId);
-  const rows = db.prepare(
+  await getStudent(targetId);
+  const rows = await db.prepare(
     `SELECT t.StudentID AS TeacherID, t.Name AS TeacherName, t.Department, t.YearOfStudy, t.HostelBlock, t.Bio, t.Avatar,
             sk.SkillID, sk.SkillName, sk.Category, so.ProficiencyLevel, so.Description, so.Availability,
             EXISTS (
               SELECT 1 FROM SKILL_WANTED tw
-              JOIN SKILL_OFFERED me ON me.SkillID = tw.SkillID AND me.StudentID = :me
+              JOIN SKILL_OFFERED me ON me.SkillID = tw.SkillID AND me.StudentID = ?
               WHERE tw.StudentID = t.StudentID
             ) AS MutualExchange
      FROM SKILL_WANTED mw
      JOIN SKILL_OFFERED so ON so.SkillID = mw.SkillID
      JOIN STUDENT t ON t.StudentID = so.StudentID
      JOIN SKILL sk ON sk.SkillID = mw.SkillID
-     WHERE mw.StudentID = :me AND t.StudentID <> :me
-     ORDER BY MutualExchange DESC, (t.HostelBlock = (SELECT HostelBlock FROM STUDENT WHERE StudentID = :me)) DESC`
-  ).all({ me: targetId });
+     WHERE mw.StudentID = ? AND t.StudentID <> ?
+     ORDER BY MutualExchange DESC, (t.HostelBlock = (SELECT HostelBlock FROM STUDENT WHERE StudentID = ?)) DESC`
+  ).all(targetId, targetId, targetId, targetId);
 
-  return rows.map((r) => {
-    const rating = teacherRating(r.TeacherID);
-    const taught = sessionCounts(r.TeacherID).sessionsTaught;
-    const wants = db.prepare(
+  return await Promise.all(rows.map(async (r) => {
+    const rating = await teacherRating(r.TeacherID);
+    const countData = await sessionCounts(r.TeacherID);
+    const taught = countData.sessionsTaught;
+    const wantRows = await db.prepare(
       `SELECT sk.SkillName FROM SKILL_WANTED sw JOIN SKILL sk ON sk.SkillID = sw.SkillID WHERE sw.StudentID = ?`
-    ).all(r.TeacherID).map((x) => x.SkillName);
+    ).all(r.TeacherID);
+    const wants = wantRows.map((x) => x.SkillName);
     const matchId = `MAT-${String(r.TeacherID).padStart(4, '0')}`;
 
     return {
@@ -1481,7 +1546,9 @@ route('GET', '/api/students/:id/matches', (req, body, p) => {
       dept: [r.Department, r.YearOfStudy].filter(Boolean).join(' • '),
       avatar: r.Avatar || initials(r.TeacherName),
       avatarBg: avatarBg(r.TeacherID),
-      rating: rating.avgRating != null ? String(rating.avgRating) : '5.0',
+      rating: rating.reviews > 0 ? Number(rating.avgRating).toFixed(2) : null,
+      reviewsCount: rating.reviews || 0,
+      reviewCount: rating.reviews || 0,
       sessionsDelivered: taught,
       skillOffered: r.SkillName,
       category: r.Category,
@@ -1504,14 +1571,14 @@ route('GET', '/api/students/:id/matches', (req, body, p) => {
       teaching: [r.SkillName],
       skills: [r.SkillName, r.Category].filter(Boolean),
     };
-  });
+  }));
 });
 
 // ---------- exchanges ----------
 const EXCHANGE_SELECT =
   `SELECT e.ExchangeID, e.Status, e.RequestDate, e.Note, e.UpdatedAt, e.SkillID, sk.SkillName,
-          e.TeacherID, t.Name AS TeacherName, t.Avatar AS TeacherAvatar,
-          e.LearnerID, l.Name AS LearnerName, l.Avatar AS LearnerAvatar
+          e.TeacherID, t.Name AS TeacherName, t.Avatar AS TeacherAvatar, t.Department AS TeacherDept,
+          e.LearnerID, l.Name AS LearnerName, l.Avatar AS LearnerAvatar, l.Department AS LearnerDept
    FROM EXCHANGE e
    JOIN SKILL sk ON sk.SkillID = e.SkillID
    JOIN STUDENT t ON t.StudentID = e.TeacherID
@@ -1532,38 +1599,44 @@ function mapExchange(e) {
     teacherId: e.TeacherID,
     teacherName: e.TeacherName,
     teacherAvatar: e.TeacherAvatar,
+    teacherDept: e.TeacherDept || '',
+    teacherStudentId: displayStudentId(e.TeacherID),
     learnerId: e.LearnerID,
     learnerName: e.LearnerName,
     learnerAvatar: e.LearnerAvatar,
+    learnerDept: e.LearnerDept || '',
+    learnerStudentId: displayStudentId(e.LearnerID),
   };
 }
 
-route('POST', '/api/exchanges', (req, body) => {
+route('POST', '/api/exchanges', async (req, body) => {
   required(body, 'teacherId', 'skillId');
   const learnerId = req.user.studentId;
   const teacherId = Number(body.teacherId);
   const skillId = Number(body.skillId);
   if (teacherId === learnerId) throw bad('Teacher and learner must be different students');
-  getStudent(teacherId); getStudent(learnerId);
-  const offers = db.prepare('SELECT 1 FROM SKILL_OFFERED WHERE StudentID = ? AND SkillID = ?')
+  await getStudent(teacherId);
+  await getStudent(learnerId);
+  const offers = await db.prepare('SELECT 1 FROM SKILL_OFFERED WHERE StudentID = ? AND SkillID = ?')
     .get(teacherId, skillId);
   if (!offers) throw bad('That student does not offer this skill');
-  const dup = db.prepare(
+  const dup = await db.prepare(
     `SELECT 1 FROM EXCHANGE WHERE TeacherID=? AND LearnerID=? AND SkillID=? AND Status IN ('Pending','Accepted')`
   ).get(teacherId, learnerId, skillId);
   if (dup) throw new HttpError(409, 'An open exchange already exists for this pair and skill');
-  db.prepare(
+  await db.prepare(
     `INSERT INTO SKILL_WANTED (StudentID, SkillID, DesiredLevel, Description, Priority)
      VALUES (?,?,?,?,?)
      ON CONFLICT(StudentID, SkillID) DO NOTHING`
   ).run(learnerId, skillId, 'Beginner', body.note ?? null, 'High');
-  const r = db.prepare('INSERT INTO EXCHANGE (TeacherID, LearnerID, SkillID, Note, UpdatedAt) VALUES (?,?,?,?, datetime(\'now\'))')
+  const r = await db.prepare('INSERT INTO EXCHANGE (TeacherID, LearnerID, SkillID, Note, UpdatedAt) VALUES (?,?,?,?, datetime(\'now\'))')
     .run(teacherId, learnerId, skillId, body.note ?? null);
-  const createdEx = mapExchange(db.prepare(`${EXCHANGE_SELECT} WHERE e.ExchangeID = ?`).get(r.lastInsertRowid));
+  const exchangeRow = await db.prepare(`${EXCHANGE_SELECT} WHERE e.ExchangeID = ?`).get(r.lastInsertRowid);
+  const createdEx = mapExchange(exchangeRow);
 
   // Automatically create notification for the teacher
   const requesterName = createdEx.LearnerName;
-  db.prepare(
+  await db.prepare(
     'INSERT INTO NOTIFICATION (StudentID, Type, Title, Message, Link, RelatedType, RelatedID) VALUES (?, ?, ?, ?, ?, ?, ?)'
   ).run(
     teacherId,
@@ -1575,28 +1648,28 @@ route('POST', '/api/exchanges', (req, body) => {
     String(createdEx.ExchangeID)
   );
 
-  checkAndAwardBadges(teacherId);
-  checkAndAwardBadges(learnerId);
+  await checkAndAwardBadges(teacherId);
+  await checkAndAwardBadges(learnerId);
 
   return [201, createdEx];
 });
 
-route('GET', '/api/exchanges', (req, body, p, q) => {
+route('GET', '/api/exchanges', async (req, body, p, q) => {
   const sid = req.user.studentId;
   const status = q ? q.get('status') : null;
   let sql = EXCHANGE_SELECT + ' WHERE (e.TeacherID = ? OR e.LearnerID = ?)';
   const args = [sid, sid];
   if (status) { sql += ' AND e.Status = ?'; args.push(status); }
-  const rows = db.prepare(sql + ' ORDER BY e.ExchangeID DESC').all(...args);
+  const rows = await db.prepare(sql + ' ORDER BY e.ExchangeID DESC').all(...args);
   return rows.map(mapExchange);
 });
 
-route('GET', '/api/exchanges/:id', (req, body, p) => {
-  const ex = getExchange(p.id);
+route('GET', '/api/exchanges/:id', async (req, body, p) => {
+  const ex = await getExchange(p.id);
   if (req.user.studentId !== Number(ex.TeacherID) && req.user.studentId !== Number(ex.LearnerID)) {
     throw new HttpError(403, 'Forbidden');
   }
-  const row = db.prepare(`${EXCHANGE_SELECT} WHERE e.ExchangeID = ?`).get(p.id);
+  const row = await db.prepare(`${EXCHANGE_SELECT} WHERE e.ExchangeID = ?`).get(p.id);
   return mapExchange(row);
 });
 
@@ -1605,9 +1678,9 @@ const TRANSITIONS = {
   Accepted: ['Completed', 'Cancelled'],
   Completed: [], Rejected: [], Cancelled: [],
 };
-route('PATCH', '/api/exchanges/:id/status', (req, body, p) => {
+route('PATCH', '/api/exchanges/:id/status', async (req, body, p) => {
   required(body, 'status');
-  const ex = getExchange(p.id);
+  const ex = await getExchange(p.id);
   if (!TRANSITIONS[ex.Status].includes(body.status)) {
     throw bad(`Cannot change status from ${ex.Status} to ${body.status}`);
   }
@@ -1636,8 +1709,9 @@ route('PATCH', '/api/exchanges/:id/status', (req, body, p) => {
     throw new HttpError(403, "Unauthorized status change");
   }
 
-  db.prepare("UPDATE EXCHANGE SET Status = ?, UpdatedAt = datetime('now') WHERE ExchangeID = ?").run(body.status, p.id);
-  const updated = mapExchange(db.prepare(`${EXCHANGE_SELECT} WHERE e.ExchangeID = ?`).get(p.id));
+  await db.prepare("UPDATE EXCHANGE SET Status = ?, UpdatedAt = datetime('now') WHERE ExchangeID = ?").run(body.status, p.id);
+  const updatedRow = await db.prepare(`${EXCHANGE_SELECT} WHERE e.ExchangeID = ?`).get(p.id);
+  const updated = mapExchange(updatedRow);
 
   // Automatically create notification for the other student on Accepted, Rejected, Cancelled
   if (['Accepted', 'Rejected', 'Cancelled'].includes(body.status)) {
@@ -1662,31 +1736,31 @@ route('PATCH', '/api/exchanges/:id/status', (req, body, p) => {
       link = '/matches#requests';
     }
 
-    db.prepare(
+    await db.prepare(
       'INSERT INTO NOTIFICATION (StudentID, Type, Title, Message, Link, RelatedType, RelatedID) VALUES (?, ?, ?, ?, ?, ?, ?)'
     ).run(targetStudentId, 'match', title, message, link, 'exchange', String(updated.ExchangeID));
   }
 
   if (body.status === 'Completed') {
-    checkAndAwardBadges(updated.TeacherID);
-    checkAndAwardBadges(updated.LearnerID);
+    await checkAndAwardBadges(updated.TeacherID);
+    await checkAndAwardBadges(updated.LearnerID);
   }
 
   return updated;
 });
 
 // ---------- sessions ----------
-route('GET', '/api/exchanges/:id/sessions', (req, body, p) => {
-  const ex = getExchange(p.id);
+route('GET', '/api/exchanges/:id/sessions', async (req, body, p) => {
+  const ex = await getExchange(p.id);
   if (req.user.studentId !== Number(ex.TeacherID) && req.user.studentId !== Number(ex.LearnerID)) {
     throw new HttpError(403, 'Forbidden');
   }
-  return db.prepare('SELECT * FROM SESSION WHERE ExchangeID = ? ORDER BY SessionDate').all(p.id);
+  return await db.prepare('SELECT * FROM SESSION WHERE ExchangeID = ? ORDER BY SessionDate').all(p.id);
 });
 
-route('POST', '/api/exchanges/:id/sessions', (req, body, p) => {
+route('POST', '/api/exchanges/:id/sessions', async (req, body, p) => {
   required(body, 'sessionDate');
-  const ex = getExchange(p.id);
+  const ex = await getExchange(p.id);
   if (req.user.studentId !== Number(ex.TeacherID) && req.user.studentId !== Number(ex.LearnerID)) {
     throw new HttpError(403, 'Forbidden');
   }
@@ -1698,7 +1772,7 @@ route('POST', '/api/exchanges/:id/sessions', (req, body, p) => {
   const link = body.meetingLink ?? body.link ?? null;
   const notes = body.notes ?? null;
 
-  const r = db.prepare(
+  const r = await db.prepare(
     `INSERT INTO SESSION (
       ExchangeID, SessionDate, StartTime, DurationMins, Topic, Mode, Location, Status, MeetingLink, Notes
     ) VALUES (?,?,?,?,?,?,?,?,?,?)`
@@ -1714,14 +1788,14 @@ route('POST', '/api/exchanges/:id/sessions', (req, body, p) => {
     link,
     notes
   );
-  const createdSession = db.prepare('SELECT * FROM SESSION WHERE SessionID = ?').get(r.lastInsertRowid);
+  const createdSession = await db.prepare('SELECT * FROM SESSION WHERE SessionID = ?').get(r.lastInsertRowid);
 
   // Notify other student of session booked (creatorId from token only)
   const creatorId = req.user.studentId;
   const targetId = creatorId === Number(ex.TeacherID) ? ex.LearnerID : ex.TeacherID;
-  const exDetails = db.prepare(`${EXCHANGE_SELECT} WHERE e.ExchangeID = ?`).get(p.id);
+  const exDetails = await db.prepare(`${EXCHANGE_SELECT} WHERE e.ExchangeID = ?`).get(p.id);
   const creatorName = creatorId === Number(ex.TeacherID) ? exDetails.TeacherName : exDetails.LearnerName;
-  db.prepare(
+  await db.prepare(
     'INSERT INTO NOTIFICATION (StudentID, Type, Title, Message, Link, RelatedType, RelatedID) VALUES (?, ?, ?, ?, ?, ?, ?)'
   ).run(
     targetId,
@@ -1733,26 +1807,36 @@ route('POST', '/api/exchanges/:id/sessions', (req, body, p) => {
     String(createdSession.SessionID)
   );
 
-  checkAndAwardBadges(ex.TeacherID);
-  checkAndAwardBadges(ex.LearnerID);
+  await checkAndAwardBadges(ex.TeacherID);
+  await checkAndAwardBadges(ex.LearnerID);
 
   return [201, createdSession];
 });
 
-route('GET', '/api/students/:id/sessions', (req, body, p) => {
+route('GET', '/api/students/:id/sessions', async (req, body, p) => {
   const targetId = Number(p.id);
   if (!req.user || req.user.studentId !== targetId) throw new HttpError(403, 'Forbidden');
-  getStudent(targetId);
-  return db.prepare(`${SESSION_SELECT} WHERE e.TeacherID = ? OR e.LearnerID = ? ORDER BY s.SessionDate DESC`)
-    .all(targetId, targetId)
-    .map((row) => mapSession(row, targetId));
+  await getStudent(targetId);
+  const reviewedRows = await db.prepare('SELECT ExchangeID FROM FEEDBACK WHERE GivenBy = ?').all(targetId);
+  const reviewedSet = new Set(reviewedRows.map((r) => r.ExchangeID));
+  const rows = await db.prepare(`${SESSION_SELECT} WHERE e.TeacherID = ? OR e.LearnerID = ? ORDER BY s.SessionDate DESC`)
+    .all(targetId, targetId);
+  return rows.map((row) => {
+    const s = mapSession(row, targetId);
+    const hasReviewed = reviewedSet.has(row.ExchangeID);
+    return {
+      ...s,
+      hasReviewed,
+      canReview: s.status === 'Completed' && !hasReviewed,
+    };
+  });
 });
 
-route('PATCH', '/api/sessions/:id', (req, body, p) => {
+route('PATCH', '/api/sessions/:id', async (req, body, p) => {
   const rawId = typeof p.id === 'string' ? Number(p.id.replace(/^SES-0*/i, '')) : Number(p.id);
-  const sess = db.prepare('SELECT * FROM SESSION WHERE SessionID = ?').get(rawId);
+  const sess = await db.prepare('SELECT * FROM SESSION WHERE SessionID = ?').get(rawId);
   if (!sess) throw notFound('Session not found');
-  const ex = getExchange(sess.ExchangeID);
+  const ex = await getExchange(sess.ExchangeID);
   if (req.user.studentId !== Number(ex.TeacherID) && req.user.studentId !== Number(ex.LearnerID)) {
     throw new HttpError(403, 'Forbidden');
   }
@@ -1765,7 +1849,7 @@ route('PATCH', '/api/sessions/:id', (req, body, p) => {
   const link = body.meetingLink ?? body.link;
   const notes = body.notes;
 
-  db.prepare(
+  await db.prepare(
     `UPDATE SESSION SET
        Status = COALESCE(?, Status),
        Topic = COALESCE(?, Topic),
@@ -1777,18 +1861,18 @@ route('PATCH', '/api/sessions/:id', (req, body, p) => {
   ).run(status ?? null, body.topic ?? null, body.location ?? link ?? null, body.sessionDate ?? null, link ?? null, notes ?? null, rawId);
 
   if (status === 'Completed') {
-    db.prepare("UPDATE EXCHANGE SET Status = 'Completed' WHERE ExchangeID = ?").run(sess.ExchangeID);
-    checkAndAwardBadges(ex.TeacherID);
-    checkAndAwardBadges(ex.LearnerID);
+    await db.prepare("UPDATE EXCHANGE SET Status = 'Completed' WHERE ExchangeID = ?").run(sess.ExchangeID);
+    await checkAndAwardBadges(ex.TeacherID);
+    await checkAndAwardBadges(ex.LearnerID);
   }
 
   // Automatic notification for session cancelled or rescheduled (actorId from token only)
   const actorId = req.user.studentId;
   const targetId = actorId === Number(ex.TeacherID) ? ex.LearnerID : ex.TeacherID;
-  const skill = db.prepare('SELECT SkillName FROM SKILL WHERE SkillID = ?').get(ex.SkillID);
+  const skill = await db.prepare('SELECT SkillName FROM SKILL WHERE SkillID = ?').get(ex.SkillID);
 
   if (status === 'Cancelled') {
-    db.prepare(
+    await db.prepare(
       'INSERT INTO NOTIFICATION (StudentID, Type, Title, Message, Link, RelatedType, RelatedID) VALUES (?, ?, ?, ?, ?, ?, ?)'
     ).run(
       targetId,
@@ -1800,7 +1884,7 @@ route('PATCH', '/api/sessions/:id', (req, body, p) => {
       String(rawId)
     );
   } else if ((body.sessionDate && body.sessionDate !== sess.SessionDate) || (body.startTime && body.startTime !== sess.StartTime)) {
-    db.prepare(
+    await db.prepare(
       'INSERT INTO NOTIFICATION (StudentID, Type, Title, Message, Link, RelatedType, RelatedID) VALUES (?, ?, ?, ?, ?, ?, ?)'
     ).run(
       targetId,
@@ -1813,14 +1897,14 @@ route('PATCH', '/api/sessions/:id', (req, body, p) => {
     );
   }
 
-  const row = db.prepare(`${SESSION_SELECT} WHERE s.SessionID = ?`).get(rawId);
+  const row = await db.prepare(`${SESSION_SELECT} WHERE s.SessionID = ?`).get(rawId);
   return mapSession(row, actorId);
 });
 
-route('POST', '/api/sessions', (req, body) => {
+route('POST', '/api/sessions', async (req, body) => {
   if (body.exchangeId) {
     required(body, 'sessionDate');
-    const ex = getExchange(body.exchangeId);
+    const ex = await getExchange(body.exchangeId);
     if (req.user.studentId !== Number(ex.TeacherID) && req.user.studentId !== Number(ex.LearnerID)) {
       throw new HttpError(403, 'Forbidden');
     }
@@ -1832,7 +1916,7 @@ route('POST', '/api/sessions', (req, body) => {
     const link = body.meetingLink ?? body.link ?? null;
     const notes = body.notes ?? null;
 
-    const r = db.prepare(
+    const r = await db.prepare(
       `INSERT INTO SESSION (
         ExchangeID, SessionDate, StartTime, DurationMins, Topic, Mode, Location, Status, MeetingLink, Notes
       ) VALUES (?,?,?,?,?,?,?,?,?,?)`
@@ -1848,15 +1932,15 @@ route('POST', '/api/sessions', (req, body) => {
       link,
       notes
     );
-    const row = db.prepare(`${SESSION_SELECT} WHERE s.SessionID = ?`).get(r.lastInsertRowid);
+    const row = await db.prepare(`${SESSION_SELECT} WHERE s.SessionID = ?`).get(r.lastInsertRowid);
 
     // Notify other student of session booked (actorId from token only)
     const actorId = req.user.studentId;
     const targetId = actorId === Number(ex.TeacherID) ? ex.LearnerID : ex.TeacherID;
-    const exDetails = db.prepare(`${EXCHANGE_SELECT} WHERE e.ExchangeID = ?`).get(ex.ExchangeID);
+    const exDetails = await db.prepare(`${EXCHANGE_SELECT} WHERE e.ExchangeID = ?`).get(ex.ExchangeID);
     const actorName = actorId === Number(ex.TeacherID) ? exDetails.TeacherName : exDetails.LearnerName;
 
-    db.prepare(
+    await db.prepare(
       'INSERT INTO NOTIFICATION (StudentID, Type, Title, Message, Link, RelatedType, RelatedID) VALUES (?, ?, ?, ?, ?, ?, ?)'
     ).run(
       targetId,
@@ -1868,8 +1952,8 @@ route('POST', '/api/sessions', (req, body) => {
       String(row.SessionID)
     );
 
-    checkAndAwardBadges(actorId);
-    checkAndAwardBadges(targetId);
+    await checkAndAwardBadges(actorId);
+    await checkAndAwardBadges(targetId);
 
     return [201, mapSession(row, actorId)];
   }
@@ -1883,12 +1967,12 @@ route('POST', '/api/sessions', (req, body) => {
   if (teacherId === learnerId) throw bad('Teacher and learner must be different students');
   let skillId = body.skillId;
   if (!skillId && (body.skill || body.skillName)) {
-    const sk = findOrCreateSkill(body.skill || body.skillName, body.category || 'General');
+    const sk = await findOrCreateSkill(body.skill || body.skillName, body.category || 'General');
     skillId = sk.SkillID;
   }
   if (!skillId) throw bad('skillId is required');
 
-  const ex = db.prepare(
+  const ex = await db.prepare(
     `SELECT * FROM EXCHANGE WHERE ((TeacherID=? AND LearnerID=?) OR (TeacherID=? AND LearnerID=?)) AND SkillID=?
      ORDER BY ExchangeID DESC LIMIT 1`
   ).get(teacherId, learnerId, learnerId, teacherId, skillId);
@@ -1902,7 +1986,7 @@ route('POST', '/api/sessions', (req, body) => {
   const link = body.meetingLink ?? body.link ?? null;
   const notes = body.notes ?? null;
 
-  const r = db.prepare(
+  const r = await db.prepare(
     `INSERT INTO SESSION (
       ExchangeID, SessionDate, StartTime, DurationMins, Topic, Mode, Location, Status, MeetingLink, Notes
     ) VALUES (?,?,?,?,?,?,?,?,?,?)`
@@ -1918,15 +2002,15 @@ route('POST', '/api/sessions', (req, body) => {
     link,
     notes
   );
-  const row = db.prepare(`${SESSION_SELECT} WHERE s.SessionID = ?`).get(r.lastInsertRowid);
+  const row = await db.prepare(`${SESSION_SELECT} WHERE s.SessionID = ?`).get(r.lastInsertRowid);
 
   // Notify other student of session booked (actorId from token only)
   const actorId = req.user.studentId;
   const targetId = actorId === teacherId ? learnerId : teacherId;
-  const sessionSkill = db.prepare('SELECT SkillName FROM SKILL WHERE SkillID = ?').get(skillId);
-  const actorStudent = getStudent(actorId);
+  const sessionSkill = await db.prepare('SELECT SkillName FROM SKILL WHERE SkillID = ?').get(skillId);
+  const actorStudent = await getStudent(actorId);
 
-  db.prepare(
+  await db.prepare(
     'INSERT INTO NOTIFICATION (StudentID, Type, Title, Message, Link, RelatedType, RelatedID) VALUES (?, ?, ?, ?, ?, ?, ?)'
   ).run(
     targetId,
@@ -1938,26 +2022,26 @@ route('POST', '/api/sessions', (req, body) => {
     String(row.SessionID)
   );
 
-  checkAndAwardBadges(teacherId);
-  checkAndAwardBadges(learnerId);
+  await checkAndAwardBadges(teacherId);
+  await checkAndAwardBadges(learnerId);
 
   return [201, mapSession(row, actorId)];
 });
 
 // ---------- feedback ----------
-route('GET', '/api/exchanges/:id/feedback', (req, body, p) => {
-  const ex = getExchange(p.id);
+route('GET', '/api/exchanges/:id/feedback', async (req, body, p) => {
+  const ex = await getExchange(p.id);
   if (req.user.studentId !== Number(ex.TeacherID) && req.user.studentId !== Number(ex.LearnerID)) {
     throw new HttpError(403, 'Forbidden');
   }
-  return db.prepare(
+  return await db.prepare(
     `SELECT f.*, s.Name AS GivenByName FROM FEEDBACK f
      JOIN STUDENT s ON s.StudentID = f.GivenBy WHERE f.ExchangeID = ?`).all(p.id);
 });
 
-route('POST', '/api/exchanges/:id/feedback', (req, body, p) => {
+route('POST', '/api/exchanges/:id/feedback', async (req, body, p) => {
   required(body, 'rating');
-  const ex = getExchange(p.id);
+  const ex = await getExchange(p.id);
   if (ex.Status !== 'Completed') throw bad('Feedback can only be given for completed exchanges');
   const givenBy = req.user.studentId;
   if (![Number(ex.TeacherID), Number(ex.LearnerID)].includes(givenBy)) {
@@ -1969,19 +2053,19 @@ route('POST', '/api/exchanges/:id/feedback', (req, body, p) => {
   const punctuality = body.punctualityRating ? Number(body.punctualityRating) : null;
   const wouldRec = body.wouldRecommend === false || body.wouldRecommend === 0 ? 0 : 1;
 
-  const r = db.prepare(
+  const r = await db.prepare(
     `INSERT INTO FEEDBACK (
       ExchangeID, GivenBy, Rating, Comments, ClarityRating, PatienceRating, PunctualityRating, WouldRecommend
     ) VALUES (?,?,?,?,?,?,?,?)`
   ).run(p.id, givenBy, body.rating, body.comments ?? body.comment ?? null, clarity, patience, punctuality, wouldRec);
 
-  const fb = db.prepare('SELECT * FROM FEEDBACK WHERE FeedbackID = ?').get(r.lastInsertRowid);
-  const reviewer = getStudent(givenBy);
-  const feedbackSkill = db.prepare('SELECT SkillName FROM SKILL WHERE SkillID = ?').get(ex.SkillID);
+  const fb = await db.prepare('SELECT * FROM FEEDBACK WHERE FeedbackID = ?').get(r.lastInsertRowid);
+  const reviewer = await getStudent(givenBy);
+  const feedbackSkill = await db.prepare('SELECT SkillName FROM SKILL WHERE SkillID = ?').get(ex.SkillID);
 
   // Notify reviewed student
   const reviewedStudentId = givenBy === Number(ex.TeacherID) ? ex.LearnerID : ex.TeacherID;
-  db.prepare(
+  await db.prepare(
     'INSERT INTO NOTIFICATION (StudentID, Type, Title, Message, Link, RelatedType, RelatedID) VALUES (?, ?, ?, ?, ?, ?, ?)'
   ).run(
     reviewedStudentId,
@@ -1993,37 +2077,97 @@ route('POST', '/api/exchanges/:id/feedback', (req, body, p) => {
     String(fb.FeedbackID)
   );
 
-  checkAndAwardBadges(reviewedStudentId);
-  checkAndAwardBadges(givenBy);
+  await checkAndAwardBadges(reviewedStudentId);
+  await checkAndAwardBadges(givenBy);
 
   return [201, fb];
 });
 
-route('GET', '/api/students/:id/feedback', (req, body, p, q) => {
+route('GET', '/api/students/:id/feedback', async (req, body, p, q) => {
   const targetId = Number(p.id);
   if (!req.user || req.user.studentId !== targetId) throw new HttpError(403, 'Forbidden');
-  getStudent(targetId);
+  await getStudent(targetId);
   const type = q ? (q.get('type') || 'all') : 'all';
-  return listFeedbackForStudent(targetId, type).map((row) => mapReview(row, targetId));
+  const rows = await listFeedbackForStudent(targetId, type);
+  return await Promise.all(rows.map((row) => mapReview(row, targetId)));
+});
+
+route('GET', '/api/students/:id/reviewable', async (req, body, p) => {
+  const targetId = Number(p.id);
+  if (!req.user || req.user.studentId !== targetId) throw new HttpError(403, 'Forbidden');
+  await getStudent(targetId);
+
+  const reviewedRows = await db.prepare('SELECT ExchangeID FROM FEEDBACK WHERE GivenBy = ?').all(targetId);
+  const reviewedSet = new Set(reviewedRows.map((r) => r.ExchangeID));
+
+  const exchanges = await db.prepare(
+    `${EXCHANGE_SELECT} WHERE (e.TeacherID = ? OR e.LearnerID = ?) AND e.Status = 'Completed' ORDER BY e.ExchangeID DESC`
+  ).all(targetId, targetId);
+
+  const sessions = await db.prepare(
+    `${SESSION_SELECT} WHERE (e.TeacherID = ? OR e.LearnerID = ?) AND (s.Status = 'Completed' OR e.Status = 'Completed') ORDER BY s.SessionDate DESC`
+  ).all(targetId, targetId);
+
+  const sessionByExchange = {};
+  for (const s of sessions) {
+    if (!sessionByExchange[s.ExchangeID]) {
+      sessionByExchange[s.ExchangeID] = s;
+    }
+  }
+
+  const reviewList = [];
+  for (const ex of exchanges) {
+    if (reviewedSet.has(ex.ExchangeID)) continue;
+    const isTeacher = Number(ex.TeacherID) === targetId;
+    const partnerId = isTeacher ? ex.LearnerID : ex.TeacherID;
+    const partnerName = isTeacher ? ex.LearnerName : ex.TeacherName;
+    const partnerDept = isTeacher ? (ex.LearnerDept || '') : (ex.TeacherDept || '');
+    const sess = sessionByExchange[ex.ExchangeID];
+    const sessionDate = sess ? sess.SessionDate : (ex.RequestDate ? String(ex.RequestDate).split(' ')[0] : new Date().toISOString().split('T')[0]);
+    const sessionTopic = sess ? (sess.Topic || sess.SkillName) : (ex.Note || ex.SkillName);
+
+    reviewList.push({
+      exchangeId: ex.ExchangeID,
+      ExchangeID: ex.ExchangeID,
+      sessionId: sess ? sess.SessionID : null,
+      SessionID: sess ? sess.SessionID : null,
+      role: isTeacher ? 'Teacher' : 'Learner',
+      partnerId,
+      partnerStudentId: displayStudentId(partnerId),
+      partnerName,
+      partnerDept,
+      name: partnerName,
+      studentId: displayStudentId(partnerId),
+      department: partnerDept,
+      skill: ex.SkillName,
+      skillName: ex.SkillName,
+      date: sessionDate,
+      sessionDate,
+      topic: sessionTopic,
+      sessionTopic,
+    });
+  }
+
+  return reviewList;
 });
 
 // ---------- availability ----------
-route('GET', '/api/students/:id/availability', (req, body, p) => {
+route('GET', '/api/students/:id/availability', async (req, body, p) => {
   const targetId = Number(p.id);
   if (!req.user || req.user.studentId !== targetId) throw new HttpError(403, 'Forbidden');
-  getStudent(targetId);
-  return getAvailability(targetId);
+  await getStudent(targetId);
+  return await getAvailability(targetId);
 });
 
-route('PUT', '/api/students/:id/availability', (req, body, p) => {
+route('PUT', '/api/students/:id/availability', async (req, body, p) => {
   const targetId = Number(p.id);
   if (!req.user || req.user.studentId !== targetId) throw new HttpError(403, 'Forbidden');
-  getStudent(targetId);
+  await getStudent(targetId);
   const days = body.days || body.weeklyAvailability || body;
   if (!Array.isArray(days)) throw bad('days array is required');
-  db.exec('BEGIN');
+  await db.exec('BEGIN');
   try {
-    db.prepare('DELETE FROM AVAILABILITY WHERE StudentID = ?').run(targetId);
+    await db.prepare('DELETE FROM AVAILABILITY WHERE StudentID = ?').run(targetId);
     const ins = db.prepare(
       'INSERT INTO AVAILABILITY (StudentID, DayOfWeek, StartTime, EndTime, Label, Enabled) VALUES (?,?,?,?,?,?)'
     );
@@ -2031,33 +2175,34 @@ route('PUT', '/api/students/:id/availability', (req, body, p) => {
       const dayName = day.day || day.DayOfWeek;
       const enabled = day.enabled === false ? 0 : 1;
       for (const slot of (day.slots || [])) {
-        ins.run(targetId, dayName, slot.start, slot.end, slot.period || slot.label || null, enabled);
+        await ins.run(targetId, dayName, slot.start, slot.end, slot.period || slot.label || null, enabled);
       }
     }
-    db.exec('COMMIT');
+    await db.exec('COMMIT');
   } catch (err) {
-    db.exec('ROLLBACK');
+    await db.exec('ROLLBACK');
     throw err;
   }
-  return getAvailability(targetId);
+  return await getAvailability(targetId);
 });
 
 // ---------- messages ----------
-route('GET', '/api/students/:id/conversations', (req, body, p) => {
+route('GET', '/api/students/:id/conversations', async (req, body, p) => {
   const targetId = Number(p.id);
   if (!req.user || req.user.studentId !== targetId) throw new HttpError(403, 'Forbidden');
-  touchStudentLastSeen(targetId);
-  getStudent(targetId);
-  return conversationsFor(targetId);
+  await touchStudentLastSeen(targetId);
+  await getStudent(targetId);
+  return await conversationsFor(targetId);
 });
 
-route('GET', '/api/students/:id/messages/:peerId', (req, body, p) => {
+route('GET', '/api/students/:id/messages/:peerId', async (req, body, p) => {
   const targetId = Number(p.id);
   if (!req.user || req.user.studentId !== targetId) throw new HttpError(403, 'Forbidden');
-  touchStudentLastSeen(targetId);
-  getStudent(targetId);
-  const peer = getStudent(p.peerId);
-  const conv = conversationsFor(targetId).find((c) => Number(c.peerId) === Number(p.peerId));
+  await touchStudentLastSeen(targetId);
+  await getStudent(targetId);
+  const peer = await getStudent(p.peerId);
+  const convList = await conversationsFor(targetId);
+  const conv = convList.find((c) => Number(c.peerId) === Number(p.peerId));
   if (conv) return conv;
   return {
     id: `conv-${p.peerId}`,
@@ -2074,22 +2219,22 @@ route('GET', '/api/students/:id/messages/:peerId', (req, body, p) => {
   };
 });
 
-route('POST', '/api/messages', (req, body) => {
+route('POST', '/api/messages', async (req, body) => {
   required(body, 'receiverId', 'body');
   const senderId = req.user.studentId;
   const receiverId = Number(body.receiverId);
   if (senderId === receiverId) throw bad('Cannot message yourself');
-  touchStudentLastSeen(senderId);
-  const sender = getStudent(senderId);
-  getStudent(receiverId);
-  const r = db.prepare('INSERT INTO MESSAGE (SenderID, ReceiverID, Body) VALUES (?,?,?)')
+  await touchStudentLastSeen(senderId);
+  const sender = await getStudent(senderId);
+  await getStudent(receiverId);
+  const r = await db.prepare('INSERT INTO MESSAGE (SenderID, ReceiverID, Body) VALUES (?,?,?)')
     .run(senderId, receiverId, String(body.body).trim());
-  const msg = db.prepare('SELECT * FROM MESSAGE WHERE MessageID = ?').get(r.lastInsertRowid);
+  const msg = await db.prepare('SELECT * FROM MESSAGE WHERE MessageID = ?').get(r.lastInsertRowid);
 
   // Notify receiver of new message
   const preview = String(body.body).trim();
   const snippet = preview.length > 50 ? preview.slice(0, 50) + '...' : preview;
-  db.prepare(
+  await db.prepare(
     'INSERT INTO NOTIFICATION (StudentID, Type, Title, Message, Link, RelatedType, RelatedID) VALUES (?, ?, ?, ?, ?, ?, ?)'
   ).run(
     receiverId,
@@ -2104,33 +2249,36 @@ route('POST', '/api/messages', (req, body) => {
   return [201, msg];
 });
 
-route('PATCH', '/api/students/:id/messages/:peerId/read', (req, body, p) => {
+route('PATCH', '/api/students/:id/messages/:peerId/read', async (req, body, p) => {
   const targetId = Number(p.id);
   if (!req.user || req.user.studentId !== targetId) throw new HttpError(403, 'Forbidden');
-  touchStudentLastSeen(targetId);
-  db.prepare('UPDATE MESSAGE SET IsRead = 1 WHERE ReceiverID = ? AND SenderID = ?').run(targetId, p.peerId);
+  await touchStudentLastSeen(targetId);
+  await db.prepare('UPDATE MESSAGE SET IsRead = 1 WHERE ReceiverID = ? AND SenderID = ?').run(targetId, p.peerId);
   return { ok: true };
 });
 
 // ---------- dashboard ----------
-route('GET', '/api/students/:id/dashboard', (req, body, p) => {
+route('GET', '/api/students/:id/dashboard', async (req, body, p) => {
   const targetId = Number(p.id);
   if (!req.user || req.user.studentId !== targetId) throw new HttpError(403, 'Forbidden');
-  const student = hydrateStudent(targetId);
-  const allSessions = db.prepare(`${SESSION_SELECT} WHERE e.TeacherID = ? OR e.LearnerID = ? ORDER BY s.SessionDate ASC`)
+  const student = await hydrateStudent(targetId);
+  const allSessions = await db.prepare(`${SESSION_SELECT} WHERE e.TeacherID = ? OR e.LearnerID = ? ORDER BY s.SessionDate ASC`)
     .all(targetId, targetId);
   const futureSessions = allSessions
     .filter((row) => isFutureSession(row))
     .map((row) => mapSession(row, targetId));
-  const matches = db.prepare(
+  const matchesRow = await db.prepare(
     `SELECT COUNT(*) AS n FROM SKILL_WANTED mw
      JOIN SKILL_OFFERED so ON so.SkillID = mw.SkillID
      WHERE mw.StudentID = ? AND so.StudentID <> ?`
-  ).get(targetId, targetId).n;
-  const convos = conversationsFor(targetId);
-  const incoming = db.prepare(
+  ).get(targetId, targetId);
+  const matches = matchesRow ? matchesRow.n : 0;
+  const convos = await conversationsFor(targetId);
+  const incoming = await db.prepare(
     `${EXCHANGE_SELECT} WHERE e.TeacherID = ? AND e.Status = 'Pending' ORDER BY e.ExchangeID DESC`
   ).all(targetId);
+  const feedbackRaw = await listFeedbackForStudent(targetId);
+  const reviews = await Promise.all(feedbackRaw.slice(0, 6).map((row) => mapReview(row, targetId)));
 
   return {
     student,
@@ -2142,6 +2290,8 @@ route('GET', '/api/students/:id/dashboard', (req, body, p) => {
       sessionsTaught: student.sessionsTaught,
       sessionsAttended: student.sessionsAttended,
       rating: student.rating,
+      reviewsCount: student.reviewsCount || 0,
+      reviewCount: student.reviewCount || 0,
       powerLevel: student.powerLevel,
       rank: student.rank,
     },
@@ -2154,16 +2304,16 @@ route('GET', '/api/students/:id/dashboard', (req, body, p) => {
       time: c.lastActive,
       unread: c.unreadCount > 0,
     })),
-    recentReviews: listFeedbackForStudent(targetId).slice(0, 6).map((row) => mapReview(row, targetId)),
+    recentReviews: reviews,
     incomingRequests: incoming,
     conversations: convos,
-    availability: getAvailability(targetId),
+    availability: await getAvailability(targetId),
   };
 });
 
 // ---------- reports ----------
-route('GET', '/api/reports/top-teachers', () =>
-  db.prepare(
+route('GET', '/api/reports/top-teachers', async () =>
+  await db.prepare(
     `SELECT t.StudentID, t.Name, COUNT(f.FeedbackID) AS Reviews, ROUND(AVG(f.Rating), 2) AS AvgRating
      FROM EXCHANGE e
      JOIN STUDENT t ON t.StudentID = e.TeacherID
@@ -2173,8 +2323,8 @@ route('GET', '/api/reports/top-teachers', () =>
      ORDER BY AvgRating DESC, Reviews DESC`
   ).all());
 
-route('GET', '/api/reports/popular-skills', () =>
-  db.prepare(
+route('GET', '/api/reports/popular-skills', async () =>
+  await db.prepare(
     `SELECT sk.SkillID, sk.SkillName, sk.Category,
             (SELECT COUNT(*) FROM SKILL_OFFERED so WHERE so.SkillID = sk.SkillID) AS Teachers,
             (SELECT COUNT(*) FROM SKILL_WANTED sw WHERE sw.SkillID = sk.SkillID) AS Learners,
@@ -2183,8 +2333,8 @@ route('GET', '/api/reports/popular-skills', () =>
      ORDER BY (Teachers + Learners + TotalExchanges) DESC`
   ).all());
 
-route('GET', '/api/reports/exchange-summary', () =>
-  db.prepare(
+route('GET', '/api/reports/exchange-summary', async () =>
+  await db.prepare(
     `SELECT Status, COUNT(*) AS Count, ROUND(COUNT(*) * 100.0 / (SELECT COUNT(*) FROM EXCHANGE), 1) AS Pct
      FROM EXCHANGE GROUP BY Status ORDER BY Count DESC`
   ).all());
@@ -2218,10 +2368,10 @@ const server = http.createServer(async (req, res) => {
         throw new HttpError(401, 'Unauthorized');
       }
       req.user = actingUser;
-      touchStudentLastSeen(actingUser.studentId);
+      await touchStudentLastSeen(actingUser.studentId);
     } else if (actingUser) {
       req.user = actingUser;
-      touchStudentLastSeen(actingUser.studentId);
+      await touchStudentLastSeen(actingUser.studentId);
     }
 
     for (const r of routes) {
@@ -2239,16 +2389,40 @@ const server = http.createServer(async (req, res) => {
   } catch (err) {
     if (err instanceof HttpError) return send(res, err.status, { error: err.message });
     const msg = String(err.message || err);
-    if (/UNIQUE constraint/.test(msg)) return send(res, 409, { error: 'Already exists: ' + msg.split(': ').pop() });
-    if (/FOREIGN KEY constraint/.test(msg)) return send(res, 400, { error: 'Referenced student, skill or exchange does not exist' });
-    if (/CHECK constraint|NOT NULL constraint/.test(msg)) return send(res, 400, { error: 'Invalid value: ' + msg });
+    if (err.code === '23505' || /UNIQUE constraint|duplicate key value/i.test(msg)) {
+      return send(res, 409, { error: 'Already exists: ' + (err.detail || msg.split(': ').pop()) });
+    }
+    if (err.code === '23503' || /FOREIGN KEY constraint|violates foreign key/i.test(msg)) {
+      return send(res, 400, { error: 'Referenced student, skill or exchange does not exist' });
+    }
+    if (err.code === '23514' || err.code === '23502' || /CHECK constraint|NOT NULL constraint|violates check|violates not-null/i.test(msg)) {
+      return send(res, 400, { error: 'Invalid value: ' + msg });
+    }
     console.error(err);
     send(res, 500, { error: 'Internal server error' });
   }
 });
 
-if (require.main === module) {
-  server.listen(PORT, () => console.log(`Skill Exchange API running on http://localhost:${PORT}`));
+async function maybeSeedDemo() {
+  if (process.env.SEED_DEMO === 'true' || process.env.SEED_DEMO === '1') {
+    try {
+      console.log('SEED_DEMO is true: checking and seeding demo data...');
+      const { seedDatabase } = require('./seed');
+      if (typeof seedDatabase === 'function') {
+        await seedDatabase();
+      }
+    } catch (err) {
+      console.error('Error during demo seeding:', err);
+    }
+  }
 }
 
-module.exports = { server };
+if (require.main === module) {
+  (async () => {
+    if (typeof runMigrations === 'function') await runMigrations();
+    await maybeSeedDemo();
+    server.listen(PORT, () => console.log(`Skill Exchange API running on http://localhost:${PORT}`));
+  })();
+}
+
+module.exports = { server, maybeSeedDemo };

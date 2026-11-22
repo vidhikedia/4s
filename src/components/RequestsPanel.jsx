@@ -184,6 +184,9 @@ const RequestsPanel = ({ showToast, onRefreshMatches }) => {
     const partnerAvatar = isTeacher
       ? (ex.LearnerAvatar || ex.learnerAvatar || getAvatarInitials(partnerName))
       : (ex.TeacherAvatar || ex.teacherAvatar || getAvatarInitials(partnerName));
+    const partnerStudentId = isTeacher
+      ? (ex.LearnerStudentId || ex.learnerStudentId || (ex.LearnerID ? `STU${String(ex.LearnerID).padStart(3, '0')}` : ''))
+      : (ex.TeacherStudentId || ex.teacherStudentId || (ex.TeacherID ? `STU${String(ex.TeacherID).padStart(3, '0')}` : ''));
     const skillName = ex.SkillName || ex.skillName || 'Skill Exchange';
     const note = ex.Note || ex.note;
     const dateFormatted = formatDate(ex.RequestDate || ex.requestDate);
@@ -203,7 +206,9 @@ const RequestsPanel = ({ showToast, onRefreshMatches }) => {
               <span className="req-partner-role-tag">
                 {isTeacher ? 'Learner (Requested You)' : 'Teacher (Your Mentor)'}
               </span>
-              <h4 className="req-partner-name">{partnerName}</h4>
+              <h4 className="req-partner-name">
+                {partnerName} {partnerStudentId && `(${partnerStudentId})`}
+              </h4>
             </div>
           </div>
           <StatusBadge status={status} />

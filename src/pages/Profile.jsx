@@ -23,6 +23,7 @@ import {
 import { useAuth, saveUser } from '../utils/auth.js';
 import api from '../utils/api.js';
 import useLiveRefresh from '../utils/useLiveRefresh.js';
+import RatingDisplay from '../components/RatingDisplay.jsx';
 import AnimatedCounter from '../components/AnimatedCounter.jsx';
 import PowerLevelMeter from '../components/PowerLevelMeter.jsx';
 import './Profile.css';
@@ -140,7 +141,9 @@ const Profile = () => {
     department: '',
     year: '',
     bio: '',
-    rating: '5.0',
+    rating: null,
+    reviewsCount: 0,
+    reviewCount: 0,
     studentId: '',
     sessionsTaught: 0,
     sessionsAttended: 0,
@@ -201,8 +204,7 @@ const Profile = () => {
                   </span>
                   <span>·</span>
                   <div className="profile-rating-badge">
-                    <Star size={13} fill="#d97706" />
-                    <span>{user.rating} Peer Rating</span>
+                    <RatingDisplay rating={user.rating} reviewCount={user.reviewsCount ?? user.reviewCount} starSize={13} />
                   </div>
                 </div>
 

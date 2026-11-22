@@ -5,11 +5,23 @@
  * Matches all endpoints defined in `skill-exchange-backend/server.js`.
  */
 
-// Base URL resolution: honors Vite environment variables with localhost fallback
-let API_BASE_URL =
-  (typeof import.meta !== 'undefined' &&
-    (import.meta.env?.VITE_API_BASE_URL || import.meta.env?.VITE_API_URL)) ||
-  'http://localhost:3000/api';
+// Base URL resolution: honors Vite environment variables with clear production error
+const envBaseUrl =
+  typeof import.meta !== 'undefined' &&
+  (import.meta.env?.VITE_API_BASE_URL || import.meta.env?.VITE_API_URL);
+
+const isProductionEnv =
+  typeof import.meta !== 'undefined' &&
+  (import.meta.env?.PROD === true || import.meta.env?.MODE === 'production');
+
+if (isProductionEnv && !envBaseUrl) {
+  console.error(
+    'Fatal Configuration Error: VITE_API_BASE_URL environment variable is missing in production. ' +
+    'Please set VITE_API_BASE_URL in your Vercel project environment variables (e.g., https://your-backend.onrender.com/api).'
+  );
+}
+
+let API_BASE_URL = envBaseUrl || 'http://localhost:3000/api';
 
 /**
  * Configure the base API URL dynamically at runtime
@@ -63,6 +75,14 @@ export class ApiClientError extends Error {
  * @returns {Promise<any>}
  */
 async function request(endpoint, options = {}) {
+  if (isProductionEnv && !envBaseUrl) {
+    throw new ApiClientError(
+      500,
+      'Configuration Error: VITE_API_BASE_URL environment variable is missing in production. ' +
+      'Please configure VITE_API_BASE_URL in your Vercel Project Settings (e.g., https://your-backend.onrender.com/api).'
+    );
+  }
+
   const { params, headers, body, ...customConfig } = options;
 
   let url = `${API_BASE_URL.replace(/\/+$/, '')}/${endpoint.replace(/^\/+/, '')}`;
@@ -489,6 +509,13 @@ export const feedbackApi = {
    */
   getByStudent: (studentId, params = {}) =>
     request(`/students/${normalizeStudentId(studentId)}/feedback`, { params }),
+
+  /**
+   * Get unreviewed completed exchanges / sessions eligible for review
+   * @param {string|number} studentId
+   */
+  getReviewable: (studentId) =>
+    request(`/students/${normalizeStudentId(studentId)}/reviewable`),
 };
 
 // -------------------------------------------------------------

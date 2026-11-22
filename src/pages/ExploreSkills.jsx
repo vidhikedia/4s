@@ -23,6 +23,7 @@ import {
   AVAILABILITY_OPTIONS
 } from '../utils/mockData.js';
 import { useAuth, submitLearningRequest } from '../utils/auth.js';
+import RatingDisplay from '../components/RatingDisplay.jsx';
 import api from '../utils/api.js';
 import MangaCard from '../components/MangaCard.jsx';
 import PowerLevelMeter from '../components/PowerLevelMeter.jsx';
@@ -367,8 +368,7 @@ const ExploreSkills = () => {
                       </div>
                     </div>
                     <div className="mentor-rating-badge">
-                      <Star size={12} fill="#b45309" />
-                      <span>{skill.mentorRating}</span>
+                      <RatingDisplay rating={skill.mentorRating ?? skill.rating} reviewCount={skill.reviewsCount ?? skill.reviewCount} starSize={12} />
                     </div>
                   </div>
 
@@ -449,10 +449,7 @@ const ExploreSkills = () => {
                   <h4 className="text-lg font-bold text-slate-900">{profileModalSkill.mentorName}</h4>
                   <p className="text-sm text-muted">{profileModalSkill.mentorDept}</p>
                   <div className="flex items-center gap-2 mt-1">
-                    <span className="flex items-center text-amber-500 font-bold text-xs">
-                      <Star size={13} fill="#f59e0b" />
-                      <span className="ml-1 text-slate-800">{profileModalSkill.mentorRating} Rating</span>
-                    </span>
+                    <RatingDisplay rating={profileModalSkill.mentorRating ?? profileModalSkill.rating} reviewCount={profileModalSkill.reviewsCount ?? profileModalSkill.reviewCount} starSize={13} />
                     <span className="text-xs text-muted">· {profileModalSkill.sessionsDelivered} sessions delivered</span>
                   </div>
                 </div>

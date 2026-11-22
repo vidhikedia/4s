@@ -45,7 +45,8 @@ import MatchFoundAnimation from '../components/MatchFoundAnimation.jsx';
 import MangaCard from '../components/MangaCard.jsx';
 import PowerLevelMeter from '../components/PowerLevelMeter.jsx';
 import AnimeIdChip from '../components/AnimeIdChip.jsx';
-import { getOrAssignTeacherCourse, buildLearningId } from '../utils/idEngine.js';
+import RatingDisplay from '../components/RatingDisplay.jsx';
+import { getOrAssignTeacherCourse, buildLearningId, buildTeachingId } from '../utils/idEngine.js';
 import { getCategoryAccentColor } from '../utils/categoryColors.js';
 import { resetScrollToTop } from '../utils/useScrollToTop.js';
 import RequestsPanel from '../components/RequestsPanel.jsx';
@@ -249,7 +250,9 @@ const Matches = () => {
           dept: r.dept || 'Engineering',
           avatar: r.avatar || ((r.name || 'ST').split(/\s+/).map((p) => p[0]).join('').slice(0, 2).toUpperCase()),
           avatarBg: r.avatarBg || 'avatar-indigo',
-          rating: r.rating || '5.0',
+          rating: r.rating != null ? r.rating : null,
+          reviewsCount: r.reviewsCount || 0,
+          reviewCount: r.reviewCount ?? r.reviewsCount ?? 0,
           sessionsDelivered: r.sessionsDelivered != null ? r.sessionsDelivered : 12,
           skillOffered: skillName,
           teachSkill: skillName,
@@ -702,10 +705,7 @@ const Matches = () => {
                           <h3>{match.name}</h3>
                           <p>{match.dept}</p>
                           <div className="flex items-center gap-1.5 mt-0.5">
-                            <span className="flex items-center text-amber-500 font-bold text-xs">
-                              <Star size={12} fill="#f59e0b" />
-                              <span className="ml-1 text-slate-800">{match.rating}</span>
-                            </span>
+                            <RatingDisplay rating={match.rating} reviewCount={match.reviewsCount ?? match.reviewCount} starSize={12} />
                             <span className="text-xs text-muted">
                               · {match.sessionsDelivered} sessions delivered
                             </span>
@@ -876,10 +876,7 @@ const Matches = () => {
                     <h4 className="text-lg font-bold text-slate-900">{profileModalPeer.name}</h4>
                     <p className="text-sm text-muted">{profileModalPeer.dept}</p>
                     <div className="flex items-center gap-2 mt-1">
-                      <span className="flex items-center text-amber-500 font-bold text-xs">
-                        <Star size={13} fill="#f59e0b" />
-                        <span className="ml-1 text-slate-800">{profileModalPeer.rating} Peer Rating</span>
-                      </span>
+                      <RatingDisplay rating={profileModalPeer.rating} reviewCount={profileModalPeer.reviewsCount ?? profileModalPeer.reviewCount} starSize={13} />
                       <span className="text-xs text-muted">· {profileModalPeer.sessionsDelivered} sessions taught</span>
                     </div>
                   </div>

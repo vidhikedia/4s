@@ -172,7 +172,7 @@ export const getBadgeProgress = (badge, student = {}) => {
   const skillsWanted = student.skillsWanted || [];
   const sessions = student.upcomingSessions || [];
   const reviews = student.recentReviews || [];
-  const userRating = parseFloat(student.rating || '4.95');
+  const userRating = student.rating != null ? parseFloat(student.rating) : 0;
 
   const completedSessions = sessions.filter((s) => s.status === 'Completed');
   const completedTeaching = completedSessions.filter(

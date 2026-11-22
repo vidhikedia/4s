@@ -1,5 +1,6 @@
 import React, { useState, useMemo, useEffect, useCallback } from 'react';
-import { Link } from 'react-router-dom';
+import { createPortal } from 'react-dom';
+import { Link, useSearchParams } from 'react-router-dom';
 import { motion, useReducedMotion } from 'framer-motion';
 import {
   Star,
@@ -21,12 +22,17 @@ import { useAuth } from '../utils/auth.js';
 import useLiveRefresh from '../utils/useLiveRefresh.js';
 import api, { normalizeStudentId } from '../utils/api.js';
 import AnimeIdChip from '../components/AnimeIdChip.jsx';
+import RatingDisplay from '../components/RatingDisplay.jsx';
+import ReviewModal from '../components/ReviewModal.jsx';
 import { getOrAssignTeacherCourse } from '../utils/idEngine.js';
 import './RatingsFeedback.css';
 
 const RatingsFeedback = () => {
   const { user } = useAuth();
   const shouldReduceMotion = useReducedMotion();
+  const [searchParams] = useSearchParams();
+  const paramExchangeId = searchParams.get('exchangeId');
+  const paramRole = searchParams.get('role');
 
   const [backendReviews, setBackendReviews] = useState([]);
   const [completedExchanges, setCompletedExchanges] = useState([]);
@@ -37,10 +43,15 @@ const RatingsFeedback = () => {
   const [isSubmitModalOpen, setIsSubmitModalOpen] = useState(false);
   const [toastMessage, setToastMessage] = useState(null);
 
+  useEffect(() => {
+    if (paramExchangeId || searchParams.get('openReview') === 'true') {
+      setIsSubmitModalOpen(true);
+    }
+  }, [paramExchangeId, searchParams]);
+
   // Review Form State
-  const [formAuthor, setFormAuthor] = useState('');
   const [formAuthorRole, setFormAuthorRole] = useState('Learner');
-  const [formRating, setFormRating] = useState(5);
+  const [formRating, setFormRating] = useState(0); // Stars start unselected
   const [formHoverRating, setFormHoverRating] = useState(0);
   const [formSkill, setFormSkill] = useState('');
   const [formComment, setFormComment] = useState('');
@@ -51,6 +62,25 @@ const RatingsFeedback = () => {
   const [isScreenPulsing, setIsScreenPulsing] = useState(false);
 
   const currentStudentId = normalizeStudentId(user?.StudentID || user?.studentId || user?.id);
+
+  // Lock body scroll and handle Escape key for feedback modal
+  useEffect(() => {
+    if (!isSubmitModalOpen) return;
+    const prevOverflow = document.body.style.overflow;
+    document.body.style.overflow = 'hidden';
+
+    const handleKeyDown = (e) => {
+      if (e.key === 'Escape') {
+        setIsSubmitModalOpen(false);
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+
+    return () => {
+      document.body.style.overflow = prevOverflow;
+      window.removeEventListener('keydown', handleKeyDown);
+    };
+  }, [isSubmitModalOpen]);
 
   const fetchFeedbackData = useCallback(async () => {
     if (!currentStudentId) {
@@ -101,35 +131,67 @@ const RatingsFeedback = () => {
   const averageRating =
     totalReviewsCount > 0
       ? (
-          reviews.reduce((acc, r) => acc + (Number(r.rating) || 5), 0) /
+          reviews.reduce((acc, r) => acc + (Number(r.rating) || 0), 0) /
           totalReviewsCount
         ).toFixed(2)
-      : '0.00';
+      : null;
 
   // Star Distribution
   const starCounts = { 5: 0, 4: 0, 3: 0, 2: 0, 1: 0 };
   reviews.forEach((r) => {
-    const star = Math.round(Number(r.rating) || 5);
+    const star = Math.round(Number(r.rating) || 0);
     if (starCounts[star] !== undefined) {
       starCounts[star] += 1;
     }
   });
 
-  const handleOpenModal = () => {
-    setFormAuthor(user?.name || 'Fellow Campus Peer');
-    setFormAuthorRole('Learner');
-    setFormRating(5);
-    setFormComment('');
-    setFormError('');
-    setSparkleRatingTrigger(5);
+  // Filter completed exchanges based on selected feedback type
+  const eligibleExchanges = useMemo(() => {
+    if (!currentStudentId) return [];
+    if (formAuthorRole === 'Learner') {
+      return completedExchanges.filter(
+        (ex) => Number(ex.LearnerID) === Number(currentStudentId)
+      );
+    }
+    return completedExchanges.filter(
+      (ex) => Number(ex.TeacherID) === Number(currentStudentId)
+    );
+  }, [completedExchanges, formAuthorRole, currentStudentId]);
 
-    const firstCompleted = completedExchanges[0];
-    if (firstCompleted) {
-      setSelectedExchangeId(String(firstCompleted.ExchangeID));
-      setFormSkill(firstCompleted.SkillName || firstCompleted.skillName || '');
+  const handleRoleChange = (role) => {
+    setFormAuthorRole(role);
+    setFormError('');
+    const matches = completedExchanges.filter((ex) =>
+      role === 'Learner'
+        ? Number(ex.LearnerID) === Number(currentStudentId)
+        : Number(ex.TeacherID) === Number(currentStudentId)
+    );
+    if (matches.length > 0) {
+      setSelectedExchangeId(String(matches[0].ExchangeID));
+      setFormSkill(matches[0].SkillName || matches[0].skillName || '');
     } else {
       setSelectedExchangeId('');
-      setFormSkill(user?.skillsOffered?.[0]?.name || 'Database Systems & SQL Optimization');
+      setFormSkill('');
+    }
+  };
+
+  const handleOpenModal = () => {
+    setFormAuthorRole('Learner');
+    setFormRating(0); // Stars start unselected
+    setFormHoverRating(0);
+    setFormComment('');
+    setFormError('');
+    setSparkleRatingTrigger(null);
+
+    const initialEligible = completedExchanges.filter(
+      (ex) => Number(ex.LearnerID) === Number(currentStudentId)
+    );
+    if (initialEligible.length > 0) {
+      setSelectedExchangeId(String(initialEligible[0].ExchangeID));
+      setFormSkill(initialEligible[0].SkillName || initialEligible[0].skillName || '');
+    } else {
+      setSelectedExchangeId('');
+      setFormSkill('');
     }
 
     setIsSubmitModalOpen(true);
@@ -152,30 +214,32 @@ const RatingsFeedback = () => {
     e.preventDefault();
     setFormError('');
 
-    if (completedExchanges.length === 0) {
-      setFormError('A student can rate a teacher only after the exchange is Completed. Please complete a session first.');
+    if (eligibleExchanges.length === 0 || !selectedExchangeId) {
+      const msg = 'Complete a session to leave a review.';
+      setFormError(msg);
+      showToast(msg);
       return;
     }
 
-    const targetEx = completedExchanges.find(
+    const targetEx = eligibleExchanges.find(
       (ex) => String(ex.ExchangeID) === String(selectedExchangeId)
-    ) || completedExchanges[0];
+    );
 
     if (!targetEx) {
-      setFormError('A student can rate a teacher only after the exchange is Completed.');
+      const msg = 'Complete a session to leave a review.';
+      setFormError(msg);
+      showToast(msg);
       return;
     }
 
-    if (!formAuthor.trim()) {
-      setFormError('Please enter reviewer name.');
-      return;
-    }
-    if (formRating < 1 || formRating > 5) {
-      setFormError('Please select a star rating between 1 and 5.');
+    if (!formRating || formRating < 1 || formRating > 5) {
+      const msg = 'Please select a star rating between 1 and 5.';
+      setFormError(msg);
       return;
     }
     if (!formComment.trim() || formComment.trim().length < 10) {
-      setFormError('Feedback comment must be at least 10 characters long.');
+      const msg = 'Feedback comment must be at least 10 characters long.';
+      setFormError(msg);
       return;
     }
 
@@ -199,11 +263,11 @@ const RatingsFeedback = () => {
       showToast('Feedback submitted successfully! Your peer rating has been updated.');
     } catch (err) {
       const msg = err?.data?.error || err?.message || 'Failed to submit feedback';
-      if (err?.status === 409 || /unique|already/i.test(msg)) {
-        setFormError('You have already submitted a review for this exchange.');
-      } else {
-        setFormError(msg);
-      }
+      const displayMsg = (err?.status === 409 || /unique|already/i.test(msg))
+        ? 'You have already submitted a review for this exchange.'
+        : msg;
+      setFormError(displayMsg);
+      showToast(displayMsg);
     } finally {
       setIsLoading(false);
     }
@@ -235,22 +299,33 @@ const RatingsFeedback = () => {
         {/* 1. Overall Rating Summary Card */}
         <div className="rating-summary-card">
           <div className="rating-score-block">
-            <div className="rating-score-num">{averageRating}</div>
-            <div className="rating-stars-row">
-              {[...Array(5)].map((_, i) => (
-                <Star
-                  key={i}
-                  size={20}
-                  fill={i < Math.round(Number(averageRating)) ? '#f59e0b' : 'none'}
-                  color="#1A1A2E"
-                  strokeWidth={2}
-                  className="summary-star-icon"
-                />
-              ))}
-            </div>
-            <div className="rating-total-text">
-              Based on {totalReviewsCount} student review{totalReviewsCount !== 1 ? 's' : ''}
-            </div>
+            {totalReviewsCount === 0 ? (
+              <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '0.65rem' }}>
+                <RatingDisplay rating={null} reviewCount={0} />
+                <div className="rating-total-text" style={{ marginTop: '0.25rem' }}>
+                  Based on 0 student reviews
+                </div>
+              </div>
+            ) : (
+              <>
+                <div className="rating-score-num">{Number(averageRating || 0).toFixed(2)} out of 5</div>
+                <div className="rating-stars-row">
+                  {[...Array(5)].map((_, i) => (
+                    <Star
+                      key={i}
+                      size={20}
+                      fill={i < Math.round(Number(averageRating)) ? '#f59e0b' : 'none'}
+                      color="#1A1A2E"
+                      strokeWidth={2}
+                      className="summary-star-icon"
+                    />
+                  ))}
+                </div>
+                <div className="rating-total-text">
+                  Based on {totalReviewsCount} student review{totalReviewsCount !== 1 ? 's' : ''}
+                </div>
+              </>
+            )}
           </div>
 
           {/* Star Distribution Bars */}
@@ -323,7 +398,9 @@ const RatingsFeedback = () => {
                         .slice(0, 2)}
                     </div>
                     <div>
-                      <h4 className="reviewer-name">{rev.author}</h4>
+                      <h4 className="reviewer-name">
+                        {rev.author} {rev.GivenBy ? `(STU${String(rev.GivenBy).padStart(3, '0')})` : ''}
+                      </h4>
                       <span
                         className={`reviewer-role-badge ${
                           rev.authorRole === 'Teacher' ? 'badge-teacher' : 'badge-learner'
@@ -350,7 +427,7 @@ const RatingsFeedback = () => {
                 <div className="review-skill-chip flex items-center gap-2 flex-wrap">
                   <span>📚 Skill / Topic: <strong>{rev.skill}</strong></span>
                   {(() => {
-                    const teacherStuId = rev.authorRole === 'Teacher' ? 'STU002' : user?.studentId || 'STU001';
+                    const teacherStuId = rev.TeacherID ? `STU${String(rev.TeacherID).padStart(3, '0')}` : (user?.studentId || currentStudentId || '');
                     const tcrId = rev.teachingId && /^TCR\d{3,4}CRS\d{3,4}$/.test(rev.teachingId)
                       ? rev.teachingId
                       : getOrAssignTeacherCourse(teacherStuId, rev.skill);
@@ -385,236 +462,13 @@ const RatingsFeedback = () => {
         </div>
 
         {/* Modal: Submit Feedback Form */}
-        {isSubmitModalOpen && (
-          <div className="profile-modal-overlay" onClick={() => setIsSubmitModalOpen(false)}>
-            <motion.div
-              className={`profile-modal-card ${isScreenPulsing ? 'modal-pulse-effect' : ''}`}
-              style={{ maxWidth: '520px' }}
-              onClick={(e) => e.stopPropagation()}
-              initial={shouldReduceMotion ? { opacity: 0 } : { scale: 0.94, opacity: 0 }}
-              animate={shouldReduceMotion ? { opacity: 1 } : { scale: 1, opacity: 1 }}
-              transition={{ type: 'spring', stiffness: 450, damping: 24 }}
-            >
-              <div className="modal-header">
-                <div>
-                  <h3 className="font-bold text-lg text-slate-900">
-                    Submit Session Feedback
-                  </h3>
-                  <p className="text-xs text-muted">
-                    Leave a peer rating and review after a completed knowledge exchange.
-                  </p>
-                </div>
-                <button
-                  type="button"
-                  onClick={() => setIsSubmitModalOpen(false)}
-                  className="modal-close-btn"
-                >
-                  <X size={20} />
-                </button>
-              </div>
-
-              <form onSubmit={handleSubmitReview}>
-                <div style={{ padding: '1.5rem', display: 'flex', flexDirection: 'column', gap: '1.1rem' }}>
-                  {formError && (
-                    <div className="modal-error-box">
-                      <AlertCircle size={15} />
-                      <span>{formError}</span>
-                    </div>
-                  )}
-
-                  {/* Reviewer Role Selection */}
-                  <div className="form-group">
-                    <label className="form-label font-bold">Feedback Type</label>
-                    <div className="grid grid-cols-2 gap-3 mt-1">
-                      <button
-                        type="button"
-                        onClick={() => setFormAuthorRole('Learner')}
-                        className={`p-3 rounded-lg border-2 text-left flex items-start gap-2.5 transition-all ${
-                          formAuthorRole === 'Learner'
-                            ? 'border-indigo-600 bg-indigo-50/70 text-indigo-900 ring-2 ring-indigo-500/20 shadow-sm'
-                            : 'border-slate-200 bg-slate-50 text-slate-700'
-                        }`}
-                      >
-                        <GraduationCap size={16} className="text-indigo-600 mt-0.5" />
-                        <div>
-                          <span className="font-bold text-xs block">Learner Review</span>
-                          <span className="text-xs text-muted">Rate your mentor</span>
-                        </div>
-                      </button>
-
-                      <button
-                        type="button"
-                        onClick={() => setFormAuthorRole('Teacher')}
-                        className={`p-3 rounded-lg border-2 text-left flex items-start gap-2.5 transition-all ${
-                          formAuthorRole === 'Teacher'
-                            ? 'border-purple-600 bg-purple-50/70 text-purple-900 ring-2 ring-purple-500/20 shadow-sm'
-                            : 'border-slate-200 bg-slate-50 text-slate-700'
-                        }`}
-                      >
-                        <BookOpen size={16} className="text-purple-600 mt-0.5" />
-                        <div>
-                          <span className="font-bold text-xs block">Mentor Review</span>
-                          <span className="text-xs text-muted">Rate your learner</span>
-                        </div>
-                      </button>
-                    </div>
-                  </div>
-
-                  {/* Reviewer Name */}
-                  <div className="form-group">
-                    <label className="form-label font-bold">
-                      Reviewer Student Name <span className="text-red-500">*</span>
-                    </label>
-                    <input
-                      type="text"
-                      className="form-control"
-                      value={formAuthor}
-                      onChange={(e) => setFormAuthor(e.target.value)}
-                      placeholder="e.g. Sneha Rao, Rohan Verma, Aarav Mehta"
-                      required
-                    />
-                  </div>
-
-                  {/* Skill / Session Topic */}
-                  <div className="form-group">
-                    <label className="form-label font-bold">
-                      Skill / Session Topic <span className="text-red-500">*</span>
-                    </label>
-                    <select
-                      className="form-control"
-                      value={selectedExchangeId}
-                      onChange={(e) => {
-                        setSelectedExchangeId(e.target.value);
-                        const matchEx = completedExchanges.find((x) => String(x.ExchangeID) === String(e.target.value));
-                        if (matchEx) setFormSkill(matchEx.SkillName || matchEx.skillName || '');
-                      }}
-                      required
-                    >
-                      {completedExchanges.length === 0 ? (
-                        <option value="">No completed exchanges available to review</option>
-                      ) : (
-                        completedExchanges.map((ex) => {
-                          const partner = Number(ex.TeacherID) === Number(currentStudentId)
-                            ? (ex.LearnerName || 'Learner')
-                            : (ex.TeacherName || 'Teacher');
-                          return (
-                            <option key={ex.ExchangeID} value={ex.ExchangeID}>
-                              {ex.SkillName || ex.skillName} (with {partner})
-                            </option>
-                          );
-                        })
-                      )}
-                    </select>
-                  </div>
-
-                  {/* Interactive Star Rating with One-by-One Pop & Sparkles Burst */}
-                  <div className="form-group">
-                    <label className="form-label font-bold flex items-center justify-between">
-                      <span>Star Rating:</span>
-                      <span className="star-rating-pill">
-                        {formRating} of 5 Stars
-                      </span>
-                    </label>
-
-                    <div className="interactive-stars-picker mt-1" role="radiogroup" aria-label="Select star rating">
-                      {[1, 2, 3, 4, 5].map((starVal) => {
-                        const filled =
-                          formHoverRating >= starVal ||
-                          (!formHoverRating && formRating >= starVal);
-                        const isChosen = formRating === starVal;
-
-                        return (
-                          <div key={starVal} className="star-btn-wrapper">
-                            <motion.button
-                              type="button"
-                              className={`star-btn ${filled ? 'star-filled' : 'star-empty'}`}
-                              onMouseEnter={() => setFormHoverRating(starVal)}
-                              onMouseLeave={() => setFormHoverRating(0)}
-                              onClick={() => handleSelectStar(starVal)}
-                              aria-label={`Rate ${starVal} stars`}
-                              animate={
-                                shouldReduceMotion
-                                  ? { scale: 1 }
-                                  : filled
-                                  ? { scale: [1, 1.32, 1] }
-                                  : { scale: 1 }
-                              }
-                              transition={
-                                shouldReduceMotion
-                                  ? { duration: 0.1 }
-                                  : {
-                                      duration: 0.28,
-                                      ease: 'easeOut',
-                                      delay: (starVal - 1) * 0.05
-                                    }
-                              }
-                            >
-                              <Star
-                                size={32}
-                                fill={filled ? '#FFD23F' : '#ffffff'}
-                                stroke="#1A1A2E"
-                                strokeWidth={2.2}
-                                className="star-svg-glyph"
-                              />
-                            </motion.button>
-
-                            {/* Sparkle burst particles on chosen rating */}
-                            {!shouldReduceMotion && isChosen && sparkleRatingTrigger === starVal && (
-                              <motion.div
-                                className="chosen-star-sparkle-burst"
-                                initial={{ scale: 0, opacity: 0 }}
-                                animate={{ scale: [0, 1.4, 0], opacity: [0, 1, 0] }}
-                                transition={{ duration: 0.55, ease: 'easeOut' }}
-                                aria-hidden="true"
-                              >
-                                <span className="sparkle-particle p1">✨</span>
-                                <span className="sparkle-particle p2">✦</span>
-                                <span className="sparkle-particle p3">★</span>
-                                <span className="sparkle-particle p4">✦</span>
-                              </motion.div>
-                            )}
-                          </div>
-                        );
-                      })}
-                    </div>
-                  </div>
-
-                  {/* Feedback Comment */}
-                  <div className="form-group">
-                    <label className="form-label font-bold">
-                      Feedback Comment <span className="text-red-500">*</span>
-                    </label>
-                    <textarea
-                      className="form-control"
-                      rows={3}
-                      value={formComment}
-                      onChange={(e) => setFormComment(e.target.value)}
-                      placeholder="Share your experience: How clearly were concepts explained? Were practical examples used? Did the session start on time?"
-                      required
-                    />
-                    <span className="text-xs text-muted">
-                      Minimum 10 characters ({formComment.length}/10)
-                    </span>
-                  </div>
-                </div>
-
-                <div className="modal-footer">
-                  <button
-                    type="button"
-                    className="btn btn-outline"
-                    onClick={() => setIsSubmitModalOpen(false)}
-                  >
-                    Cancel
-                  </button>
-                  <button type="submit" className="btn btn-primary">
-                    <CheckCircle2 size={16} />
-                    <span>Submit Feedback</span>
-                  </button>
-                </div>
-              </form>
-            </motion.div>
-          </div>
-        )}
+        <ReviewModal
+          isOpen={isSubmitModalOpen}
+          onClose={() => setIsSubmitModalOpen(false)}
+          preselectedExchangeId={paramExchangeId}
+          preselectedRole={paramRole}
+          onReviewSubmitted={fetchFeedbackData}
+        />
       </div>
     </div>
   );

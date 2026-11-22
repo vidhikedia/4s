@@ -31,7 +31,8 @@ CREATE TABLE STUDENT (
     PortfolioUrl TEXT,
     Interests    TEXT,
     Languages    TEXT,
-    LastSeenAt   TEXT
+    LastSeenAt   TEXT,
+    SkillMasterShown INTEGER DEFAULT 0
 );
 
 CREATE TABLE SKILL (

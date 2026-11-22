@@ -23,6 +23,7 @@ import { useAuth } from '../utils/auth.js';
 import api from '../utils/api.js';
 import MangaCard from '../components/MangaCard.jsx';
 import PowerLevelMeter from '../components/PowerLevelMeter.jsx';
+import RatingDisplay from '../components/RatingDisplay.jsx';
 import AnimeIdChip from '../components/AnimeIdChip.jsx';
 import { getCategoryAccentColor } from '../utils/categoryColors.js';
 import './MySkills.css';
@@ -343,9 +344,8 @@ const MySkills = () => {
               <span className="banner-stat-label">Total Peers Mentored</span>
             </div>
             <div className="banner-stat-item">
-              <span className="banner-stat-val flex items-center text-amber-500">
-                <Star size={18} fill="#f59e0b" />
-                <span className="ml-1 text-slate-800">{user.rating || '4.95'}</span>
+              <span className="banner-stat-val flex items-center">
+                <RatingDisplay rating={user.rating} reviewCount={user.reviewsCount ?? user.reviewCount} starSize={18} />
               </span>
               <span className="banner-stat-label">Average Mentor Rating</span>
             </div>
@@ -423,10 +423,7 @@ const MySkills = () => {
 
                   <div className="my-skill-impact">
                     <span><strong>{skill.learnersHelped || 0}</strong> students helped</span>
-                    <span className="flex items-center text-amber-500 font-bold">
-                      <Star size={13} fill="#f59e0b" />
-                      <span className="ml-1 text-slate-800">{skill.rating || '5.0'}</span>
-                    </span>
+                    <RatingDisplay rating={skill.rating} reviewCount={skill.reviewsCount ?? skill.reviewCount} starSize={13} />
                   </div>
                 </div>
               </MangaCard>

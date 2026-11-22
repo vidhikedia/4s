@@ -1,19 +1,10 @@
-// Creates all tables from schema.sql and loads sample campus data.
+// Creates all tables from schema.sql / schema.pg.sql and loads sample campus data.
 // Run with: npm run seed   (this RESETS the database)
 const fs = require('fs');
 const path = require('path');
-const { db, hashPassword } = require('./db');
-
-db.exec(fs.readFileSync(path.join(__dirname, 'schema.sql'), 'utf8'));
+const { db, hashPassword, runMigrations } = require('./db');
 
 const pass = hashPassword('password123');
-
-const addStudent = db.prepare(
-  `INSERT INTO STUDENT (
-    Name, Email, Department, YearOfStudy, Bio, HostelBlock, RoomNo, Password,
-    Avatar, Phone, GithubUrl, LinkedinUrl, PortfolioUrl, Interests, Languages
-  ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
-);
 
 const students = [
   [
@@ -101,10 +92,8 @@ const students = [
     'Pandas, NumPy, SQL, Data Visualization', 'English, Tamil, Hindi'
   ],
 ];
-students.forEach((s) => addStudent.run(...s.slice(0, 7), pass, ...s.slice(7)));
 
-const addSkill = db.prepare('INSERT INTO SKILL (SkillName, Category) VALUES (?, ?)');
-[
+const skills = [
   ['Photoshop', 'Graphic Design'],
   ['Python', 'Python'],
   ['Video Editing', 'Media'],
@@ -119,14 +108,9 @@ const addSkill = db.prepare('INSERT INTO SKILL (SkillName, Category) VALUES (?, 
   ['Vector Graphic Design in Adobe Illustrator', 'Graphic Design'],
   ['DSLR Photography & Composition', 'Photography'],
   ['Data Science with Pandas, SQL & NumPy', 'Data Science'],
-].forEach((s) => addSkill.run(...s));
+];
 
-const offered = db.prepare(
-  `INSERT INTO SKILL_OFFERED (
-    StudentID, SkillID, ProficiencyLevel, Description, Availability, Tags, SampleTopics, YearsOfExperience
-  ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
-);
-[
+const offeredSkills = [
   [1, 6, 'Advanced', 'Component lifecycles, custom hooks, state management, and responsive UI with Tailwind CSS.', 'Weekdays after 4 PM', 'React, Frontend, JavaScript, Tailwind CSS', 'Hooks, Context API, Redux Toolkit, State Lifting', 2],
   [1, 7, 'Advanced', 'Relational schema design, normalization, joins, indexing, and transaction ACID properties.', 'Weekends & Evenings', 'SQL, Database Systems, Normalization, Query Tuning', 'Schema design, B-Tree indexing, ACID transactions', 2],
   [1, 2, 'Intermediate', 'Python syntax, data structures, OOP, and scripting for college labs.', 'Weekdays 5 PM – 7 PM', 'Python, OOP, Scripting, Automation', 'Python syntax, data structures, OOP classes', 1],
@@ -144,14 +128,9 @@ const offered = db.prepare(
   [10, 5, 'Expert', 'Hook-problem-solution framework, slide pacing, and hackathon pitching.', 'Weekends', 'Public Speaking, Pitching, Communication', 'Presentation structure, vocal modulation, Q&A handling', 3],
   [11, 11, 'Advanced', 'Design systems, auto-layout 5, component variants, and prototyping.', 'Weekdays after 4 PM', 'Figma, Design Systems, Tokens, Prototyping', 'Component variants, auto-layout, design tokens', 2],
   [12, 14, 'Advanced', 'Pandas dataframes, groupby, merging, and cleaning dirty datasets.', 'Weekends', 'Pandas, NumPy, SQL, Data Cleaning', 'Data cleaning, groupby aggregates, merging', 2],
-].forEach((r) => offered.run(...r));
+];
 
-const wanted = db.prepare(
-  `INSERT INTO SKILL_WANTED (
-    StudentID, SkillID, DesiredLevel, Description, Priority, PreferredAvailability, TargetGoal
-  ) VALUES (?, ?, ?, ?, ?, ?, ?)`
-);
-[
+const wantedSkills = [
   [1, 5, 'Advanced', 'Overcome stage anxiety for hackathon presentations.', 'High', 'Evenings (6 PM – 8 PM)', 'Overcome stage anxiety for upcoming college hackathon presentations.'],
   [1, 8, 'Advanced', 'Want to build predictive models for a DBMS & AI mini-project.', 'High', 'Weekday Evenings & Weekends', 'Want to build predictive models for final semester DBMS & AI mini-project.'],
   [1, 9, 'Intermediate', 'Learn containerizing React + Node applications.', 'Medium', 'Weekdays', 'Learn containerizing React + Node applications and deploying to cloud containers.'],
@@ -169,43 +148,33 @@ const wanted = db.prepare(
   [10, 2, 'Beginner', 'Want Python OOP for automation scripts.', 'Medium', 'Weekends', 'Automate business report generation using Python.'],
   [11, 6, 'Intermediate', 'Want to implement design systems in the browser.', 'High', 'Weekdays', 'Build Tailwind CSS components matching Figma design tokens.'],
   [12, 6, 'Intermediate', 'Want React for data dashboards.', 'Medium', 'Weekends', 'Integrate Pandas analysis outputs with live React data charts.'],
-].forEach((r) => wanted.run(...r));
+];
 
-const addEx = db.prepare(
-  'INSERT INTO EXCHANGE (TeacherID, LearnerID, SkillID, Status, RequestDate, Note, UpdatedAt) VALUES (?, ?, ?, ?, ?, ?, ?)'
-);
-addEx.run(7, 1, 8, 'Accepted', '2026-09-28', 'Looking forward to learning scikit-learn basics for my course project.', '2026-09-28 11:00:00');   // 1 Rashi teaches Vidhi ML
-addEx.run(1, 2, 6, 'Accepted', '2026-09-30', 'Need guidance with custom hooks and React component architecture.', '2026-09-30 14:00:00');   // 2 Vidhi teaches Aarav React
-addEx.run(1, 5, 7, 'Completed', '2026-09-20', 'Exam prep for database normalization and index optimization.', '2026-10-02 18:30:00');  // 3 Vidhi taught Sneha SQL
-addEx.run(3, 1, 2, 'Completed', '2026-09-18', 'Lab assignments on OOP in Python.', '2026-09-25 17:00:00');  // 4 Diya taught Vidhi Python (for ratings)
-addEx.run(8, 1, 9, 'Pending', '2026-10-08', 'Would love to learn Docker multi-stage builds for deployment.', '2026-10-08 16:00:00');    // 5 Vidhi requested Docker from Riya
-addEx.run(3, 2, 2, 'Completed', '2026-09-12', 'Python scripting and automation help.', '2026-09-20 15:00:00');  // 6 Diya taught Aarav Python (reports)
+const exchanges = [
+  [7, 1, 8, 'Accepted', '2026-09-28', 'Looking forward to learning scikit-learn basics for my course project.', '2026-09-28 11:00:00'],
+  [1, 2, 6, 'Accepted', '2026-09-30', 'Need guidance with custom hooks and React component architecture.', '2026-09-30 14:00:00'],
+  [1, 5, 7, 'Completed', '2026-09-20', 'Exam prep for database normalization and index optimization.', '2026-10-02 18:30:00'],
+  [3, 1, 2, 'Completed', '2026-09-18', 'Lab assignments on OOP in Python.', '2026-09-25 17:00:00'],
+  [8, 1, 9, 'Pending', '2026-10-08', 'Would love to learn Docker multi-stage builds for deployment.', '2026-10-08 16:00:00'],
+  [3, 2, 2, 'Completed', '2026-09-12', 'Python scripting and automation help.', '2026-09-20 15:00:00'],
+];
 
-const addSes = db.prepare(
-  `INSERT INTO SESSION (
-    ExchangeID, SessionDate, StartTime, DurationMins, Topic, Mode, Location, Status, MeetingLink, Notes
-  ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
-);
-addSes.run(1, '2026-10-09', '17:30', 75, 'Linear & Logistic Regression with Pandas Preprocessing', 'Offline', 'Campus Library Hub – Study Room 3B', 'Scheduled', null, 'Bring laptop with Jupyter / VS Code and Scikit-Learn installed.');
-addSes.run(2, '2026-10-06', '16:00', 60, 'React State Lifting, Custom Hooks & Context API', 'Online', 'https://meet.google.com/4s-vidhi-aarav', 'Scheduled', 'https://meet.google.com/4s-vidhi-aarav', 'Walk through lifting state from form components into custom hooks and setting up clean React Context providers.');
-addSes.run(3, '2026-10-02', '17:00', 75, 'B-Tree Indexing & Query Plan Explain Analysis', 'Offline', 'Discussion Pod A', 'Completed', null, 'Explain B-Tree indexing, clustering, and query plan explain analysis on discussion board.');
-addSes.run(4, '2026-09-28', '16:00', 60, 'Python classes, inheritance & dunder methods', 'Online', 'https://meet.google.com/4s-python-session', 'Completed', 'https://meet.google.com/4s-python-session', 'Review python OOP syntax and custom dunder methods.');
-addSes.run(6, '2026-09-20', '15:00', 60, 'Python basics for first-year labs', 'Offline', 'Hostel A common room', 'Completed', null, 'Python basics and lab assignment walkthrough.');
+const sessions = [
+  [1, '2026-10-09', '17:30', 75, 'Linear & Logistic Regression with Pandas Preprocessing', 'Offline', 'Campus Library Hub – Study Room 3B', 'Scheduled', null, 'Bring laptop with Jupyter / VS Code and Scikit-Learn installed.'],
+  [2, '2026-10-06', '16:00', 60, 'React State Lifting, Custom Hooks & Context API', 'Online', 'https://meet.google.com/4s-vidhi-aarav', 'Scheduled', 'https://meet.google.com/4s-vidhi-aarav', 'Walk through lifting state from form components into custom hooks and setting up clean React Context providers.'],
+  [3, '2026-10-02', '17:00', 75, 'B-Tree Indexing & Query Plan Explain Analysis', 'Offline', 'Discussion Pod A', 'Completed', null, 'Explain B-Tree indexing, clustering, and query plan explain analysis on discussion board.'],
+  [4, '2026-09-28', '16:00', 60, 'Python classes, inheritance & dunder methods', 'Online', 'https://meet.google.com/4s-python-session', 'Completed', 'https://meet.google.com/4s-python-session', 'Review python OOP syntax and custom dunder methods.'],
+  [6, '2026-09-20', '15:00', 60, 'Python basics for first-year labs', 'Offline', 'Hostel A common room', 'Completed', null, 'Python basics and lab assignment walkthrough.'],
+];
 
-const addFb = db.prepare(
-  `INSERT INTO FEEDBACK (
-    ExchangeID, GivenBy, Rating, Comments, CreatedAt, ClarityRating, PatienceRating, PunctualityRating, WouldRecommend
-  ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
-);
-addFb.run(3, 5, 5, 'Vidhi is an outstanding mentor! She explained B-Tree indexing with simple drawings.', '2026-10-02 18:30:00', 5, 5, 5, 1);
-addFb.run(4, 1, 5, 'Diya explains Python really clearly.', '2026-09-28 17:10:00', 5, 5, 4, 1);
-addFb.run(6, 2, 5, 'Great Python tips for lab work.', '2026-09-20 16:20:00', 5, 4, 5, 1);
-addFb.run(6, 3, 4, 'Aarav is a quick learner.', '2026-09-20 16:25:00', 4, 5, 5, 1);
+const feedbacks = [
+  [3, 5, 5, 'Vidhi is an outstanding mentor! She explained B-Tree indexing with simple drawings.', '2026-10-02 18:30:00', 5, 5, 5, 1],
+  [4, 1, 5, 'Diya explains Python really clearly.', '2026-09-28 17:10:00', 5, 5, 4, 1],
+  [6, 2, 5, 'Great Python tips for lab work.', '2026-09-20 16:20:00', 5, 4, 5, 1],
+  [6, 3, 4, 'Aarav is a quick learner.', '2026-09-20 16:25:00', 4, 5, 5, 1],
+];
 
-const addAvail = db.prepare(
-  'INSERT INTO AVAILABILITY (StudentID, DayOfWeek, StartTime, EndTime, Label, Enabled) VALUES (?, ?, ?, ?, ?, ?)'
-);
-[
+const availabilities = [
   [1, 'Monday', '16:00', '18:00', 'Evening Lab Hours', 1],
   [1, 'Tuesday', '17:00', '19:00', 'Post-Lecture Slot', 1],
   [1, 'Thursday', '16:00', '18:00', 'Library Study Hall', 1],
@@ -214,26 +183,21 @@ const addAvail = db.prepare(
   [1, 'Saturday', '15:00', '17:30', 'Afternoon Coding Labs', 1],
   [7, 'Friday', '17:30', '19:00', 'ML lab', 1],
   [2, 'Monday', '16:00', '17:00', 'React practice', 1],
-].forEach((r) => addAvail.run(...r));
+];
 
-const addMsg = db.prepare(
-  'INSERT INTO MESSAGE (SenderID, ReceiverID, Body, SentAt, IsRead) VALUES (?, ?, ?, ?, ?)'
-);
-addMsg.run(7, 1, 'Hi Vidhi! I saw your learning request for Machine Learning with Scikit-Learn.', '2026-10-01 10:14:00', 1);
-addMsg.run(1, 7, 'Hey Rashi! Yes – I want regression algorithms for our DBMS & AI project.', '2026-10-01 10:18:00', 1);
-addMsg.run(7, 1, 'Awesome! I booked our Friday 5:30 PM slot in Study Room 3B at the library.', '2026-10-01 10:30:00', 0);
-addMsg.run(8, 1, 'Hey Vidhi! Noticed your request for Docker containerization.', '2026-10-02 15:15:00', 1);
-addMsg.run(1, 8, 'Hi Riya! I want to containerize React + Node with Docker Compose.', '2026-10-02 15:45:00', 1);
-addMsg.run(8, 1, 'I scheduled a session idea for Sunday 3:00 PM over Google Meet.', '2026-10-03 16:02:00', 0);
-addMsg.run(2, 1, 'Hi Vidhi, thanks for accepting my request to learn React.js!', '2026-10-03 14:10:00', 1);
-addMsg.run(1, 2, 'Happy to help, Aarav! Have you worked with useState before?', '2026-10-03 14:25:00', 1);
-addMsg.run(2, 1, 'Thanks for sending the starter repository! Looking forward to tomorrow.', '2026-10-03 18:00:00', 1);
+const messages = [
+  [7, 1, 'Hi Vidhi! I saw your learning request for Machine Learning with Scikit-Learn.', '2026-10-01 10:14:00', 1],
+  [1, 7, 'Hey Rashi! Yes – I want regression algorithms for our DBMS & AI project.', '2026-10-01 10:18:00', 1],
+  [7, 1, 'Awesome! I booked our Friday 5:30 PM slot in Study Room 3B at the library.', '2026-10-01 10:30:00', 0],
+  [8, 1, 'Hey Vidhi! Noticed your request for Docker containerization.', '2026-10-02 15:15:00', 1],
+  [1, 8, 'Hi Riya! I want to containerize React + Node with Docker Compose.', '2026-10-02 15:45:00', 1],
+  [8, 1, 'I scheduled a session idea for Sunday 3:00 PM over Google Meet.', '2026-10-03 16:02:00', 0],
+  [2, 1, 'Hi Vidhi, thanks for accepting my request to learn React.js!', '2026-10-03 14:10:00', 1],
+  [1, 2, 'Happy to help, Aarav! Have you worked with useState before?', '2026-10-03 14:25:00', 1],
+  [2, 1, 'Thanks for sending the starter repository! Looking forward to tomorrow.', '2026-10-03 18:00:00', 1],
+];
 
-// Badges catalog (reusing definitions from badgeEngine.js)
-const addBadge = db.prepare(
-  'INSERT INTO BADGE (BadgeID, Title, Category, Icon, BadgeClass, Criterion, TargetValue, Unit) VALUES (?, ?, ?, ?, ?, ?, ?, ?)'
-);
-[
+const badges = [
   ['badge-first-skill', 'First Teaching Skill', 'Teaching', 'BookOpen', 'badge-indigo', 'Publish 1 teaching skill offering on campus', 1, 'skills'],
   ['badge-first-request', 'First Learning Goal', 'Learning', 'Layers', 'badge-blue', 'Post 1 skill learning request on wishlist', 1, 'goals'],
   ['badge-first-match', 'First Match', 'Milestone', 'Sparkles', 'badge-purple', 'Generate 1 peer skill match on campus', 1, 'matches'],
@@ -244,13 +208,9 @@ const addBadge = db.prepare(
   ['badge-top-mentor', 'Top Peer Mentor', 'Teaching', 'Award', 'badge-gold', 'Maintain a 4.90+ rating with at least 1 completed teaching session', 1, 'sessions'],
   ['badge-master-teacher', 'Master Instructor', 'Teaching', 'Star', 'badge-teal', 'Complete 3 teaching sessions with peer learners', 3, 'sessions'],
   ['badge-five-star', 'Five-Star Scholar', 'Milestone', 'Sparkles', 'badge-gold', 'Receive 3 five-star peer ratings', 3, 'reviews'],
-].forEach((b) => addBadge.run(...b));
+];
 
-// Student Badges
-const addStudentBadge = db.prepare(
-  'INSERT INTO STUDENT_BADGE (StudentID, BadgeID, EarnedAt, ActivityTrigger) VALUES (?, ?, ?, ?)'
-);
-[
+const studentBadges = [
   [1, 'badge-first-skill', '2026-10-02 10:00:00', 'Published React.js & Frontend Architecture'],
   [1, 'badge-first-request', '2026-10-03 11:00:00', 'Posted Applied Machine Learning wishlist request'],
   [1, 'badge-first-match', '2026-10-04 12:00:00', 'Mutual match with Rashi Chandani'],
@@ -260,21 +220,129 @@ const addStudentBadge = db.prepare(
   [1, 'badge-top-mentor', '2026-10-06 19:00:00', 'Maintained 5.0 rating across verified sessions'],
   [3, 'badge-first-skill', '2026-09-15 10:00:00', 'Published Python for Data'],
   [3, 'badge-first-completed', '2026-09-18 17:30:00', 'Taught Python fundamentals to Vidhi Kedia'],
-].forEach((sb) => addStudentBadge.run(...sb));
+];
 
-// Notifications
-const addNotif = db.prepare(
-  'INSERT INTO NOTIFICATION (StudentID, Type, Title, Message, Link, RelatedType, RelatedID, CreatedAt, IsRead) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)'
-);
-[
+const notifications = [
   [1, 'match', 'New Peer Match Found!', 'You matched with Rashi Chandani for Machine Learning & React swap.', '/matches#requests', 'exchange', '1', '2026-10-01 10:15:00', 0],
   [1, 'session', 'Upcoming Session Tomorrow', 'React State Lifting with Aarav Sharma is scheduled for 4:00 PM.', '/sessions', 'session', '1', '2026-10-05 09:00:00', 0],
   [1, 'badge', 'New Badge Unlocked!', 'You earned the "Top Peer Mentor" gold badge!', '/profile', 'badge', 'badge-top-mentor', '2026-10-06 19:00:00', 1],
   [1, 'review', 'New Feedback Received', 'Sneha Iyer left you a 5-star rating for SQL optimization.', '/profile', 'feedback', '1', '2026-10-02 18:35:00', 1],
   [2, 'session', 'Session Scheduled', 'Your React session with Vidhi Kedia has been scheduled.', '/sessions', 'session', '2', '2026-10-03 14:30:00', 0],
   [7, 'match', 'Exchange Request Accepted', 'Vidhi Kedia accepted your Machine Learning exchange.', '/sessions', 'exchange', '1', '2026-09-28 11:00:00', 1],
-].forEach((n) => addNotif.run(...n));
+];
 
-console.log('Database created and seeded: skillexchange.db');
-console.log('Demo password for all students: password123');
-console.log('Try: kediavidhi62@gmail.com  or  aarav@campus.edu');
+async function seedDatabase() {
+  const schemaFile = db.isPostgres ? 'schema.pg.sql' : 'schema.sql';
+  const schemaSql = fs.readFileSync(path.join(__dirname, schemaFile), 'utf8');
+  await db.exec(schemaSql);
+  if (typeof runMigrations === 'function') {
+    runMigrations();
+  }
+
+  const addStudent = db.prepare(
+    `INSERT INTO STUDENT (
+      Name, Email, Department, YearOfStudy, Bio, HostelBlock, RoomNo, Password,
+      Avatar, Phone, GithubUrl, LinkedinUrl, PortfolioUrl, Interests, Languages
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+  );
+  for (const s of students) {
+    await addStudent.run(...s.slice(0, 7), pass, ...s.slice(7));
+  }
+
+  const addSkill = db.prepare('INSERT INTO SKILL (SkillName, Category) VALUES (?, ?)');
+  for (const s of skills) {
+    await addSkill.run(...s);
+  }
+
+  const addOffered = db.prepare(
+    `INSERT INTO SKILL_OFFERED (
+      StudentID, SkillID, ProficiencyLevel, Description, Availability, Tags, SampleTopics, YearsOfExperience
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
+  );
+  for (const r of offeredSkills) {
+    await addOffered.run(...r);
+  }
+
+  const addWanted = db.prepare(
+    `INSERT INTO SKILL_WANTED (
+      StudentID, SkillID, DesiredLevel, Description, Priority, PreferredAvailability, TargetGoal
+    ) VALUES (?, ?, ?, ?, ?, ?, ?)`
+  );
+  for (const r of wantedSkills) {
+    await addWanted.run(...r);
+  }
+
+  const addEx = db.prepare(
+    'INSERT INTO EXCHANGE (TeacherID, LearnerID, SkillID, Status, RequestDate, Note, UpdatedAt) VALUES (?, ?, ?, ?, ?, ?, ?)'
+  );
+  for (const e of exchanges) {
+    await addEx.run(...e);
+  }
+
+  const addSes = db.prepare(
+    `INSERT INTO SESSION (
+      ExchangeID, SessionDate, StartTime, DurationMins, Topic, Mode, Location, Status, MeetingLink, Notes
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+  );
+  for (const s of sessions) {
+    await addSes.run(...s);
+  }
+
+  const addFb = db.prepare(
+    `INSERT INTO FEEDBACK (
+      ExchangeID, GivenBy, Rating, Comments, CreatedAt, ClarityRating, PatienceRating, PunctualityRating, WouldRecommend
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
+  );
+  for (const f of feedbacks) {
+    await addFb.run(...f);
+  }
+
+  const addAvail = db.prepare(
+    'INSERT INTO AVAILABILITY (StudentID, DayOfWeek, StartTime, EndTime, Label, Enabled) VALUES (?, ?, ?, ?, ?, ?)'
+  );
+  for (const a of availabilities) {
+    await addAvail.run(...a);
+  }
+
+  const addMsg = db.prepare(
+    'INSERT INTO MESSAGE (SenderID, ReceiverID, Body, SentAt, IsRead) VALUES (?, ?, ?, ?, ?)'
+  );
+  for (const m of messages) {
+    await addMsg.run(...m);
+  }
+
+  const addBadge = db.prepare(
+    'INSERT INTO BADGE (BadgeID, Title, Category, Icon, BadgeClass, Criterion, TargetValue, Unit) VALUES (?, ?, ?, ?, ?, ?, ?, ?)'
+  );
+  for (const b of badges) {
+    await addBadge.run(...b);
+  }
+
+  const addStudentBadge = db.prepare(
+    'INSERT INTO STUDENT_BADGE (StudentID, BadgeID, EarnedAt, ActivityTrigger) VALUES (?, ?, ?, ?)'
+  );
+  for (const sb of studentBadges) {
+    await addStudentBadge.run(...sb);
+  }
+
+  const addNotif = db.prepare(
+    'INSERT INTO NOTIFICATION (StudentID, Type, Title, Message, Link, RelatedType, RelatedID, CreatedAt, IsRead) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)'
+  );
+  for (const n of notifications) {
+    await addNotif.run(...n);
+  }
+
+  console.log(`Database created and seeded: ${db.isPostgres ? 'PostgreSQL' : 'skillexchange.db'}`);
+  console.log('Demo password for all students: password123');
+  console.log('Try: kediavidhi62@gmail.com  or  aarav@campus.edu');
+}
+
+// Auto-seed if executed directly (e.g. node seed.js or npm run seed)
+if (require.main === module) {
+  seedDatabase().catch((err) => {
+    console.error('Seed error:', err);
+    process.exit(1);
+  });
+}
+
+module.exports = { seedDatabase };

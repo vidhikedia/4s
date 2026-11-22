@@ -712,6 +712,7 @@ const Messages = () => {
               ) : (
                 filteredStudents.map((st) => {
                   const stId = Number(st.id || st.StudentID);
+                  const stStudentId = st.studentId || (stId ? `STU${String(stId).padStart(3, '0')}` : '');
                   const stName = st.name || st.Name;
                   const stDept = [st.department || st.Department, st.year || st.YearOfStudy].filter(Boolean).join(' • ');
                   const stAvatar = st.avatar || st.Avatar || (stName || 'ST').split(' ').map((n) => n[0]).join('').slice(0, 2);
@@ -730,7 +731,7 @@ const Messages = () => {
                         </div>
                         <div className="new-message-student-info">
                           <div className="new-message-student-name">
-                            <span>{stName}</span>
+                            <span>{stName} {stStudentId && `(${stStudentId})`}</span>
                             {st.isOnline && (
                               <span style={{ width: '6px', height: '6px', borderRadius: '50%', backgroundColor: '#16a34a', display: 'inline-block' }} />
                             )}

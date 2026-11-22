@@ -4,12 +4,14 @@ const fs = require('fs');
 const crypto = require('crypto');
 
 // Isolated temporary database for testing - never touches skillexchange.db
-const tempDbPath = path.join(os.tmpdir(), `test_skillexchange_${Date.now()}_${Math.random().toString(36).slice(2)}.db`);
-process.env.DB_PATH = tempDbPath;
+const isPostgres = Boolean(process.env.DATABASE_URL && (process.env.DATABASE_URL.startsWith('postgres://') || process.env.DATABASE_URL.startsWith('postgresql://')));
+const tempDbPath = !isPostgres ? path.join(os.tmpdir(), `test_skillexchange_${Date.now()}_${Math.random().toString(36).slice(2)}.db`) : '';
+if (!isPostgres) {
+  process.env.DB_PATH = tempDbPath;
+}
 
 // Seed fresh data into isolated temp database
-require('./seed');
-
+const { seedDatabase } = require('./seed');
 const { db } = require('./db');
 const { server } = require('./server');
 
@@ -41,6 +43,8 @@ function check(name, cond, extra = '') {
 }
 
 (async () => {
+  await seedDatabase();
+
   // Start in-process test server on an ephemeral free port (port 0)
   await new Promise((resolve, reject) => {
     testServer = server.listen(0, '127.0.0.1', (err) => {
@@ -408,7 +412,7 @@ function check(name, cond, extra = '') {
   check('student online when active within 2 minutes', stuProfile.status === 200 && stuProfile.data.isOnline === true && stuProfile.data.onlineStatus === 'online');
 
   // 2. When last seen is older than 2 minutes (e.g. 5 minutes ago), peer sees them offline
-  db.prepare("UPDATE STUDENT SET LastSeenAt = datetime('now', '-5 minutes') WHERE StudentID = ?").run(newId);
+  await db.prepare("UPDATE STUDENT SET LastSeenAt = ? WHERE StudentID = ?").run(new Date(Date.now() - 5 * 60 * 1000).toISOString(), newId);
   stuProfile = await call('GET', `/api/students/${newId}`, null, { Authorization: `Bearer ${vidhiToken}` });
   check('student offline when last seen > 2 minutes ago', stuProfile.status === 200 && stuProfile.data.isOnline === false && stuProfile.data.onlineStatus === 'offline');
 
@@ -600,22 +604,22 @@ function check(name, cond, extra = '') {
   console.log('No Auto-Accept and No Automatic Messages Verification');
 
   // 1. One send creates exactly one MESSAGE row and no reply after 3s
-  const msgCountBefore1 = db.prepare('SELECT COUNT(*) AS c FROM MESSAGE').get().c;
+  const msgCountBefore1 = (await db.prepare('SELECT COUNT(*) AS c FROM MESSAGE').get()).c;
   const singleSend = await call('POST', '/api/messages', {
     receiverId: 1,
     body: 'Hello Vidhi, manual message test.'
   }, { Authorization: `Bearer ${freshToken}` });
   check('message send succeeds', singleSend.status === 201);
-  const msgCountAfterSend = db.prepare('SELECT COUNT(*) AS c FROM MESSAGE').get().c;
+  const msgCountAfterSend = (await db.prepare('SELECT COUNT(*) AS c FROM MESSAGE').get()).c;
   check('one send creates exactly one MESSAGE row immediately', msgCountAfterSend === msgCountBefore1 + 1);
 
   // Wait 3 seconds to verify no bot / auto-reply runs
   await new Promise((res) => setTimeout(res, 3100));
-  const msgCountAfter3s = db.prepare('SELECT COUNT(*) AS c FROM MESSAGE').get().c;
+  const msgCountAfter3s = (await db.prepare('SELECT COUNT(*) AS c FROM MESSAGE').get()).c;
   check('one send creates exactly one MESSAGE row and no reply after 3s', msgCountAfter3s === msgCountAfterSend);
 
   // 2. Request, accept and session create ZERO MESSAGE rows
-  const msgCountBeforeReq = db.prepare('SELECT COUNT(*) AS c FROM MESSAGE').get().c;
+  const msgCountBeforeReq = (await db.prepare('SELECT COUNT(*) AS c FROM MESSAGE').get()).c;
 
   // New student requests an exchange with Vidhi (teacher 1) for skill 7 (SQL)
   const testExReq = await call('POST', '/api/exchanges', {
@@ -624,19 +628,19 @@ function check(name, cond, extra = '') {
     note: 'Topic: Database Design | Preferred Time: Tomorrow 4pm | Mode: Online'
   }, { Authorization: `Bearer ${freshToken}` });
   check('request is Pending', testExReq.status === 201 && testExReq.data.Status === 'Pending');
-  const msgCountAfterReq = db.prepare('SELECT COUNT(*) AS c FROM MESSAGE').get().c;
+  const msgCountAfterReq = (await db.prepare('SELECT COUNT(*) AS c FROM MESSAGE').get()).c;
   check('exchange request creates ZERO MESSAGE rows', msgCountAfterReq === msgCountBeforeReq);
 
   // Accept exchange as teacher
   const testExAccept = await call('PATCH', `/api/exchanges/${testExReq.data.ExchangeID}/status`, { status: 'Accepted' }, { Authorization: `Bearer ${vidhiToken}` });
   check('exchange accepted by teacher', testExAccept.status === 200 && testExAccept.data.Status === 'Accepted');
-  const msgCountAfterAccept = db.prepare('SELECT COUNT(*) AS c FROM MESSAGE').get().c;
+  const msgCountAfterAccept = (await db.prepare('SELECT COUNT(*) AS c FROM MESSAGE').get()).c;
   check('exchange accept creates ZERO MESSAGE rows', msgCountAfterAccept === msgCountBeforeReq);
 
   // Session on accepted exchange
   const testExSess = await call('POST', `/api/exchanges/${testExReq.data.ExchangeID}/sessions`, { sessionDate: '2026-12-15' }, { Authorization: `Bearer ${freshToken}` });
   check('session on accepted exchange created', testExSess.status === 201);
-  const msgCountAfterSess = db.prepare('SELECT COUNT(*) AS c FROM MESSAGE').get().c;
+  const msgCountAfterSess = (await db.prepare('SELECT COUNT(*) AS c FROM MESSAGE').get()).c;
   check('request, accept and session create ZERO MESSAGE rows', msgCountAfterSess === msgCountBeforeReq);
 
   // 3. Sessions without Accepted return 409
@@ -917,7 +921,7 @@ function check(name, cond, extra = '') {
   check('[Pair 1] Alice deleted skill -> 204', p1DelRes.status === 204);
 
   // Assert 1: Pending exchange is set to Cancelled
-  const p1ExCheck = db.prepare('SELECT Status FROM EXCHANGE WHERE ExchangeID = ?').get(p1ExId);
+  const p1ExCheck = await db.prepare('SELECT Status FROM EXCHANGE WHERE ExchangeID = ?').get(p1ExId);
   check('[Pair 1] Pending exchange set to Cancelled on skill delete', p1ExCheck?.Status === 'Cancelled');
 
   // Assert 2: Bob receives notification
@@ -1081,7 +1085,7 @@ function check(name, cond, extra = '') {
   await call('PATCH', `/api/sessions/${p3CancelSessId}`, { status: 'Cancelled' }, { Authorization: `Bearer ${p3ElenaToken}` });
 
   // 3. Past session (date in past e.g. 2026-10-10) inserted via database helper
-  db.prepare(
+  await db.prepare(
     `INSERT INTO SESSION (ExchangeID, SessionDate, StartTime, DurationMins, Topic, Mode, Location, Status)
      VALUES (?, '2026-10-10', '10:00', 60, 'Past Due Session', 'Offline', 'Library', 'Scheduled')`
   ).run(p3ExId);
@@ -1128,7 +1132,7 @@ function check(name, cond, extra = '') {
   check('[Pair 3] Frank deleted wanted skill -> 204', p3DelWantedRes.status === 204);
 
   // Assert pending exchange cancelled & Elena notified
-  const p3ExStatus = db.prepare('SELECT Status FROM EXCHANGE WHERE ExchangeID = ?').get(p3FrankExId);
+  const p3ExStatus = await db.prepare('SELECT Status FROM EXCHANGE WHERE ExchangeID = ?').get(p3FrankExId);
   check('[Pair 3] Pending exchange cancelled on wanted skill delete', p3ExStatus?.Status === 'Cancelled');
 
   const p3ElenaNotifs = await call('GET', `/api/students/${p3ElenaId}/notifications`, null, {
@@ -1181,7 +1185,9 @@ function check(name, cond, extra = '') {
 
   // --- ITEM 4: Indexes in schema.sql and db.js Verification ---
   console.log('\n--- ITEM 4: Indexes Verification in Temporary Database ---');
-  const allIndexes = db.prepare("SELECT name, tbl_name, sql FROM sqlite_master WHERE type = 'index'").all();
+  const allIndexes = db.isPostgres
+    ? await db.query("SELECT indexname AS name FROM pg_indexes")
+    : await db.prepare("SELECT name, tbl_name, sql FROM sqlite_master WHERE type = 'index'").all();
   const indexNames = new Set(allIndexes.map(i => i.name));
 
   check('Item 4: idx_exchange_skill exists', indexNames.has('idx_exchange_skill'));
@@ -1196,10 +1202,10 @@ function check(name, cond, extra = '') {
 
   let dupPendingFailed = false;
   try {
-    db.prepare("INSERT INTO EXCHANGE (TeacherID, LearnerID, SkillID, Status) VALUES (1, 2, 1, 'Pending')").run();
-    db.prepare("INSERT INTO EXCHANGE (TeacherID, LearnerID, SkillID, Status) VALUES (1, 2, 1, 'Pending')").run();
+    await db.prepare("INSERT INTO EXCHANGE (TeacherID, LearnerID, SkillID, Status) VALUES (1, 2, 1, 'Pending')").run();
+    await db.prepare("INSERT INTO EXCHANGE (TeacherID, LearnerID, SkillID, Status) VALUES (1, 2, 1, 'Pending')").run();
   } catch (err) {
-    if (err && err.message && err.message.toLowerCase().includes('unique')) {
+    if (err && (err.code === '23505' || (err.message && err.message.toLowerCase().includes('unique')))) {
       dupPendingFailed = true;
     }
   }
@@ -1207,24 +1213,260 @@ function check(name, cond, extra = '') {
 
   let dupCompletedSucceeded = false;
   try {
-    db.prepare("INSERT INTO EXCHANGE (TeacherID, LearnerID, SkillID, Status) VALUES (1, 3, 1, 'Completed')").run();
-    db.prepare("INSERT INTO EXCHANGE (TeacherID, LearnerID, SkillID, Status) VALUES (1, 3, 1, 'Completed')").run();
+    await db.prepare("INSERT INTO EXCHANGE (TeacherID, LearnerID, SkillID, Status) VALUES (1, 3, 1, 'Completed')").run();
+    await db.prepare("INSERT INTO EXCHANGE (TeacherID, LearnerID, SkillID, Status) VALUES (1, 3, 1, 'Completed')").run();
     dupCompletedSucceeded = true;
   } catch (err) {
     dupCompletedSucceeded = false;
   }
   check('Item 4: unique partial index allows duplicate Completed exchanges', dupCompletedSucceeded);
 
+  // --- PART 4: Verification with 3 New Account Pairs ---
+  console.log('\n--- PART 4: Verification with 3 New Account Pairs ---');
+
+  // Pair 1: Learner review allowed only for Completed exchange + 1 review per exchange per person
+  const p4_t1_res = await call('POST', '/api/register', {
+    name: 'P4 Teacher One',
+    email: `p4_t1_${Date.now()}_${Math.random().toString(36).slice(2)}@campus.edu`,
+    password: 'password123',
+    department: 'Computer Science'
+  }, { Authorization: '' });
+  const p4_t1_id = p4_t1_res.data.StudentID;
+  const p4_t1_token = p4_t1_res.data.token;
+
+  const p4_l1_res = await call('POST', '/api/register', {
+    name: 'P4 Learner One',
+    email: `p4_l1_${Date.now()}_${Math.random().toString(36).slice(2)}@campus.edu`,
+    password: 'password123',
+    department: 'Computer Science'
+  }, { Authorization: '' });
+  const p4_l1_id = p4_l1_res.data.StudentID;
+  const p4_l1_token = p4_l1_res.data.token;
+
+  const p4_off1_res = await call('POST', `/api/students/${p4_t1_id}/offered`, {
+    skillName: 'Cloud Infrastructure Architecture',
+    category: 'Computer Science',
+    level: 'Advanced',
+    description: 'AWS and Cloud Design'
+  }, { Authorization: `Bearer ${p4_t1_token}` });
+  const p4_skill1_id = p4_off1_res.data.skillId || p4_off1_res.data.SkillID;
+
+  const p4_ex1_res = await call('POST', '/api/exchanges', {
+    teacherId: p4_t1_id,
+    skillId: p4_skill1_id,
+    note: 'Help with cloud architecture'
+  }, { Authorization: `Bearer ${p4_l1_token}` });
+  const p4_ex1_id = p4_ex1_res.data.ExchangeID;
+  check('Part 4 Pair 1: Exchange created with Pending status', p4_ex1_res.status === 201 && p4_ex1_res.data.Status === 'Pending');
+
+  // Attempt review on Pending exchange -> must fail 400
+  const p4_rev_pending = await call('POST', `/api/exchanges/${p4_ex1_id}/feedback`, {
+    rating: 5,
+    comments: 'Great session on cloud architecture, very informative!'
+  }, { Authorization: `Bearer ${p4_l1_token}` });
+  check('Part 4 Pair 1: Review blocked on Pending exchange with 400', p4_rev_pending.status === 400);
+
+  // Teacher accepts exchange
+  await call('PATCH', `/api/exchanges/${p4_ex1_id}/status`, { status: 'Accepted' }, { Authorization: `Bearer ${p4_t1_token}` });
+
+  // Schedule a session for this exchange
+  const p4_ses1_res = await call('POST', '/api/sessions', {
+    exchangeId: p4_ex1_id,
+    sessionDate: '2026-11-25',
+    timeSlot: '14:00 - 15:00',
+    meetingLink: 'https://meet.google.com/p4-test-meet',
+    notes: 'Cloud architecture design session'
+  }, { Authorization: `Bearer ${p4_t1_token}` });
+  const p4_ses1_id = p4_ses1_res.data.SessionID || p4_ses1_res.data.sessionId || p4_ses1_res.data.id;
+
+  // Attempt review on Accepted exchange -> must fail 400
+  const p4_rev_accepted = await call('POST', `/api/exchanges/${p4_ex1_id}/feedback`, {
+    rating: 5,
+    comments: 'Great session on cloud architecture, very informative!'
+  }, { Authorization: `Bearer ${p4_l1_token}` });
+  check('Part 4 Pair 1: Review blocked on Accepted exchange with 400', p4_rev_accepted.status === 400);
+
+  // Before completion: verify reviewable is empty and session canReview is false
+  const p4_sess_before = await call('GET', `/api/students/${p4_l1_id}/sessions`, null, { Authorization: `Bearer ${p4_l1_token}` });
+  const p4_s1 = p4_sess_before.data?.find(s => s.exchangeId === p4_ex1_id || s.ExchangeID === p4_ex1_id);
+  check('Part 4 Pair 1: Uncompleted session canReview is false', p4_s1?.canReview === false);
+  check('Part 4 Pair 1: Uncompleted session hasReviewed is false', p4_s1?.hasReviewed === false);
+
+  const p4_rev_before = await call('GET', `/api/students/${p4_l1_id}/reviewable`, null, { Authorization: `Bearer ${p4_l1_token}` });
+  const p4_in_rev_before = p4_rev_before.data?.some(r => r.exchangeId === p4_ex1_id);
+  check('Part 4 Pair 1: Uncompleted exchange not in reviewable list', !p4_in_rev_before);
+
+  // Teacher marks exchange and session Completed
+  await call('PATCH', `/api/sessions/${p4_ses1_id}`, { status: 'Completed' }, { Authorization: `Bearer ${p4_t1_token}` });
+  await call('PATCH', `/api/exchanges/${p4_ex1_id}/status`, { status: 'Completed' }, { Authorization: `Bearer ${p4_t1_token}` });
+
+  // Completed but unreviewed session has canReview=true and is present in reviewable list
+  const p4_sess_completed = await call('GET', `/api/students/${p4_l1_id}/sessions`, null, { Authorization: `Bearer ${p4_l1_token}` });
+  const p4_s1_comp = p4_sess_completed.data?.find(s => s.exchangeId === p4_ex1_id || s.ExchangeID === p4_ex1_id);
+  check('Part 4 Pair 1: Completed unreviewed session canReview is true', p4_s1_comp?.canReview === true);
+  check('Part 4 Pair 1: Completed unreviewed session hasReviewed is false', p4_s1_comp?.hasReviewed === false);
+
+  const p4_rev_completed = await call('GET', `/api/students/${p4_l1_id}/reviewable`, null, { Authorization: `Bearer ${p4_l1_token}` });
+  const p4_rev_item = p4_rev_completed.data?.find(r => r.exchangeId === p4_ex1_id);
+  check('Part 4 Pair 1: Reviewable list includes completed unreviewed exchange', !!p4_rev_item);
+  check('Part 4 Pair 1: Reviewable item has name', typeof p4_rev_item?.name === 'string' && p4_rev_item.name.length > 0);
+  check('Part 4 Pair 1: Reviewable item has studentId', typeof p4_rev_item?.studentId === 'string' && /^STU\d{3}$/.test(p4_rev_item.studentId));
+  check('Part 4 Pair 1: Reviewable item has department', typeof p4_rev_item?.department === 'string' && p4_rev_item.department.length > 0);
+  check('Part 4 Pair 1: Reviewable item has skill', typeof p4_rev_item?.skill === 'string' && p4_rev_item.skill.length > 0);
+  check('Part 4 Pair 1: Reviewable item has date', typeof p4_rev_item?.date === 'string' && p4_rev_item.date.length > 0);
+
+  // Learner reviews Completed exchange -> succeeds 201
+  const p4_rev_ok = await call('POST', `/api/exchanges/${p4_ex1_id}/feedback`, {
+    rating: 5,
+    comments: 'Great session on cloud architecture, very informative!'
+  }, { Authorization: `Bearer ${p4_l1_token}` });
+  check('Part 4 Pair 1: Review allowed on Completed exchange with 201', p4_rev_ok.status === 201);
+
+  // After review: verify canReview is false, hasReviewed is true, and reviewable no longer contains it
+  const p4_sess_after = await call('GET', `/api/students/${p4_l1_id}/sessions`, null, { Authorization: `Bearer ${p4_l1_token}` });
+  const p4_s1_after = p4_sess_after.data?.find(s => s.exchangeId === p4_ex1_id || s.ExchangeID === p4_ex1_id);
+  check('Part 4 Pair 1: Reviewed session canReview is false', p4_s1_after?.canReview === false);
+  check('Part 4 Pair 1: Reviewed session hasReviewed is true', p4_s1_after?.hasReviewed === true);
+
+  const p4_rev_after = await call('GET', `/api/students/${p4_l1_id}/reviewable`, null, { Authorization: `Bearer ${p4_l1_token}` });
+  const p4_in_rev_after = p4_rev_after.data?.some(r => r.exchangeId === p4_ex1_id);
+  check('Part 4 Pair 1: Reviewed exchange removed from reviewable list', !p4_in_rev_after);
+
+  // Learner attempts duplicate review on same exchange -> fails 409
+  const p4_rev_dup = await call('POST', `/api/exchanges/${p4_ex1_id}/feedback`, {
+    rating: 4,
+    comments: 'Attempting a second review on the same exchange!'
+  }, { Authorization: `Bearer ${p4_l1_token}` });
+  check('Part 4 Pair 1: Duplicate review by same student rejected with 409', p4_rev_dup.status === 409);
+
+  // Pair 2: Teacher review allowed only for Completed exchange + 1 review per exchange per person
+  const p4_t2_res = await call('POST', '/api/register', {
+    name: 'P4 Teacher Two',
+    email: `p4_t2_${Date.now()}_${Math.random().toString(36).slice(2)}@campus.edu`,
+    password: 'password123',
+    department: 'Electrical Engineering'
+  }, { Authorization: '' });
+  const p4_t2_id = p4_t2_res.data.StudentID;
+  const p4_t2_token = p4_t2_res.data.token;
+
+  const p4_l2_res = await call('POST', '/api/register', {
+    name: 'P4 Learner Two',
+    email: `p4_l2_${Date.now()}_${Math.random().toString(36).slice(2)}@campus.edu`,
+    password: 'password123',
+    department: 'Electrical Engineering'
+  }, { Authorization: '' });
+  const p4_l2_id = p4_l2_res.data.StudentID;
+  const p4_l2_token = p4_l2_res.data.token;
+
+  const p4_off2_res = await call('POST', `/api/students/${p4_t2_id}/offered`, {
+    skillName: 'VLSI Circuit Design',
+    category: 'Engineering',
+    level: 'Intermediate',
+    description: 'Digital layout and Verilog'
+  }, { Authorization: `Bearer ${p4_t2_token}` });
+  const p4_skill2_id = p4_off2_res.data.skillId || p4_off2_res.data.SkillID;
+
+  const p4_ex2_res = await call('POST', '/api/exchanges', {
+    teacherId: p4_t2_id,
+    skillId: p4_skill2_id,
+    note: 'Need help with FPGA layout'
+  }, { Authorization: `Bearer ${p4_l2_token}` });
+  const p4_ex2_id = p4_ex2_res.data.ExchangeID;
+
+  // Teacher attempts review on Pending exchange -> 400
+  const p4_t2_rev_pending = await call('POST', `/api/exchanges/${p4_ex2_id}/feedback`, {
+    rating: 5,
+    comments: 'Punctual and engaged learner, eager to learn!'
+  }, { Authorization: `Bearer ${p4_t2_token}` });
+  check('Part 4 Pair 2: Teacher review blocked on Pending exchange with 400', p4_t2_rev_pending.status === 400);
+
+  // Teacher accepts exchange then marks Completed
+  await call('PATCH', `/api/exchanges/${p4_ex2_id}/status`, { status: 'Accepted' }, { Authorization: `Bearer ${p4_t2_token}` });
+  await call('PATCH', `/api/exchanges/${p4_ex2_id}/status`, { status: 'Completed' }, { Authorization: `Bearer ${p4_t2_token}` });
+
+  // Teacher leaves review on Completed exchange -> 201
+  const p4_t2_rev_ok = await call('POST', `/api/exchanges/${p4_ex2_id}/feedback`, {
+    rating: 5,
+    comments: 'Punctual and engaged learner, eager to learn!'
+  }, { Authorization: `Bearer ${p4_t2_token}` });
+  check('Part 4 Pair 2: Teacher review allowed on Completed exchange with 201', p4_t2_rev_ok.status === 201);
+
+  // Teacher attempts duplicate review on same exchange -> 409
+  const p4_t2_rev_dup = await call('POST', `/api/exchanges/${p4_ex2_id}/feedback`, {
+    rating: 5,
+    comments: 'Duplicate review from teacher on same exchange.'
+  }, { Authorization: `Bearer ${p4_t2_token}` });
+  check('Part 4 Pair 2: Duplicate review from teacher rejected with 409', p4_t2_rev_dup.status === 409);
+
+  // Pair 3: Brand new account shows rating null and reviewCount 0 on every endpoint
+  const p4_new_res = await call('POST', '/api/register', {
+    name: 'P4 Fresh Student',
+    email: `p4_fresh_${Date.now()}_${Math.random().toString(36).slice(2)}@campus.edu`,
+    password: 'password123',
+    department: 'Mathematics'
+  }, { Authorization: '' });
+  const p4_new_id = p4_new_res.data.StudentID;
+  const p4_new_token = p4_new_res.data.token;
+
+  // 1. Register response has rating null and reviewCount 0
+  check('Part 4 Pair 3: Register response rating is null', p4_new_res.data.rating === null);
+  check('Part 4 Pair 3: Register response reviewCount is 0', (p4_new_res.data.reviewCount || 0) === 0 && (p4_new_res.data.reviewsCount || 0) === 0);
+
+  // 2. Profile endpoint /api/students/:id
+  const p4_prof_res = await call('GET', `/api/students/${p4_new_id}`, null, { Authorization: `Bearer ${p4_new_token}` });
+  check('Part 4 Pair 3: New account profile rating is null', p4_prof_res.data.rating === null);
+  check('Part 4 Pair 3: New account profile reviewCount is 0', (p4_prof_res.data.reviewCount || 0) === 0 && (p4_prof_res.data.reviewsCount || 0) === 0);
+
+  // 3. Students directory endpoint /api/students
+  const p4_students_res = await call('GET', '/api/students', null, { Authorization: `Bearer ${p4_new_token}` });
+  const p4_student_in_dir = p4_students_res.data?.find(s => s.StudentID === p4_new_id || s.studentId === p4_new_id || s.id === p4_new_id);
+  check('Part 4 Pair 3: Directory listing rating is null', p4_student_in_dir?.rating === null);
+  check('Part 4 Pair 3: Directory listing reviewCount is 0', (p4_student_in_dir?.reviewCount || 0) === 0 && (p4_student_in_dir?.reviewsCount || 0) === 0);
+
+  // 4. Dashboard endpoint /api/students/:id/dashboard
+  const p4_dash_res = await call('GET', `/api/students/${p4_new_id}/dashboard`, null, { Authorization: `Bearer ${p4_new_token}` });
+  check('Part 4 Pair 3: Dashboard stats rating is null', p4_dash_res.data?.stats?.rating === null);
+  check('Part 4 Pair 3: Dashboard stats reviewCount is 0', (p4_dash_res.data?.stats?.reviewCount || 0) === 0 && (p4_dash_res.data?.stats?.reviewsCount || 0) === 0);
+
+  // 5. Matches endpoint /api/students/:id/matches
+  const p4_match_res = await call('GET', `/api/students/${p4_new_id}/matches`, null, { Authorization: `Bearer ${p4_new_token}` });
+  check('Part 4 Pair 3: Matches endpoint returns 200', p4_match_res.status === 200);
+
+  // 6. Explore endpoint /api/explore
+  const p4_exp_res = await call('GET', '/api/explore', null, { Authorization: `Bearer ${p4_new_token}` });
+  check('Part 4 Pair 3: Explore endpoint returns 200', p4_exp_res.status === 200);
+
+  // 7. Check leaderboard
+  const p4_lb_res = await call('GET', '/api/leaderboard', null, { Authorization: '' });
+  check('Part 4 Pair 3: Leaderboard endpoint returned 200', p4_lb_res.status === 200);
+  const lbEntries = p4_lb_res.data;
+  const newAccountLb = lbEntries.find(e => e.studentId === p4_new_id || e.StudentID === p4_new_id || e.id === p4_new_id || e.numericId === p4_new_id);
+  const teacherWithReviews = lbEntries.find(e => (e.reviewsCount || e.reviews || e.teachingReviewsCount || 0) > 0);
+
+  check('Part 4 Pair 3: New account leaderboard rating is null', newAccountLb?.rating === null);
+  check('Part 4 Pair 3: New account leaderboard reviews is 0', (newAccountLb?.reviewsCount || newAccountLb?.reviews || newAccountLb?.teachingReviewsCount || 0) === 0);
+  if (newAccountLb && teacherWithReviews) {
+    check('Part 4 Pair 3: New account ranks below teacher with real reviews', (teacherWithReviews.score || 0) > (newAccountLb.score || 0));
+  } else {
+    check('Part 4 Pair 3: Leaderboard entry exists', !!newAccountLb);
+  }
+
+  // Static check: routes for /matches#requests and /profile in App.jsx
+  const appJsxPath = path.resolve(__dirname, '../src/App.jsx');
+  const appJsxContent = fs.readFileSync(appJsxPath, 'utf-8');
+  check('Part 4 Static: /matches route exists in App.jsx', appJsxContent.includes('path="matches"') || appJsxContent.includes("path='matches'"));
+  check('Part 4 Static: /profile route exists in App.jsx', appJsxContent.includes('path="profile"') || appJsxContent.includes("path='profile'"));
+
   console.log(`\n${passed} passed, ${failed} failed`);
   if (testServer) {
-    testServer.close(() => {
-      try { db.close(); } catch {}
-      try { fs.unlinkSync(tempDbPath); } catch {}
+    testServer.close(async () => {
+      try { await db.close(); } catch {}
+      try { if (tempDbPath) fs.unlinkSync(tempDbPath); } catch {}
       process.exit(failed ? 1 : 0);
     });
   } else {
-    try { db.close(); } catch {}
-    try { fs.unlinkSync(tempDbPath); } catch {}
+    try { await db.close(); } catch {}
+    try { if (tempDbPath) fs.unlinkSync(tempDbPath); } catch {}
     process.exit(failed ? 1 : 0);
   }
 })();

@@ -23,6 +23,7 @@ import {
 import { useAuth, saveUser } from '../utils/auth.js';
 import api from '../utils/api.js';
 import useLiveRefresh from '../utils/useLiveRefresh.js';
+import RatingDisplay from '../components/RatingDisplay.jsx';
 import AnimatedCounter from '../components/AnimatedCounter.jsx';
 import PowerLevelMeter from '../components/PowerLevelMeter.jsx';
 import AnimeIdChip, { AnimeIdGuideButton } from '../components/AnimeIdChip.jsx';
@@ -96,10 +97,7 @@ const Dashboard = () => {
                 <span>·</span>
                 <span>{user.year || '1st Year'}</span>
                 <span>·</span>
-                <span className="flex items-center text-amber-500 font-bold">
-                  <Star size={14} fill="#f59e0b" />
-                  <span className="ml-1 text-slate-800">{user.rating || '5.00'} Peer Rating</span>
-                </span>
+                <RatingDisplay rating={user.rating} reviewCount={user.reviewsCount ?? user.reviewCount} />
               </div>
               <div className="flex items-center gap-2 flex-wrap mt-2">
                 <span className="px-2.5 py-1 rounded bg-indigo-50 border border-indigo-200 text-indigo-700 font-mono text-xs font-bold">
@@ -449,10 +447,7 @@ const Dashboard = () => {
                             {skill.learnersHelped || 0} helped
                           </span>
                           <span>·</span>
-                          <span className="flex items-center text-amber-500 font-bold">
-                            <Star size={12} fill="#f59e0b" />
-                            <span className="ml-1">{skill.rating}</span>
-                          </span>
+                          <RatingDisplay rating={skill.rating} reviewCount={skill.reviewsCount ?? skill.reviewCount} starSize={12} />
                         </div>
 
                         {/* Enrolled learners list */}

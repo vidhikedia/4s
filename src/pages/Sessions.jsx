@@ -24,7 +24,8 @@ import {
   X,
   Sparkles,
   Layers,
-  RotateCcw
+  RotateCcw,
+  Star
 } from 'lucide-react';
 import {
   useAuth,
@@ -33,8 +34,43 @@ import {
   cancelSession
 } from '../utils/auth.js';
 import api from '../utils/api.js';
+import ReviewModal from '../components/ReviewModal.jsx';
 import AnimeIdChip from '../components/AnimeIdChip.jsx';
 import './Sessions.css';
+
+const isSessionStartTimePassed = (session) => {
+  if (!session || !session.date) return false;
+  const now = new Date();
+  const pad = (n) => String(n).padStart(2, '0');
+  const todayStr = `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}`;
+
+  if (session.date < todayStr) return true;
+  if (session.date > todayStr) return false;
+
+  // Session date is today
+  const timeStr = String(session.time || session.StartTime || '').trim();
+  if (!timeStr || timeStr === 'To be confirmed') return true;
+
+  let hours = 0;
+  let minutes = 0;
+  const match12 = timeStr.match(/^(\d{1,2}):(\d{2})\s*(AM|PM)/i);
+  const match24 = timeStr.match(/^(\d{1,2}):(\d{2})/);
+
+  if (match12) {
+    hours = parseInt(match12[1], 10);
+    minutes = parseInt(match12[2], 10);
+    const meridiem = match12[3].toUpperCase();
+    if (meridiem === 'PM' && hours < 12) hours += 12;
+    if (meridiem === 'AM' && hours === 12) hours = 0;
+  } else if (match24) {
+    hours = parseInt(match24[1], 10);
+    minutes = parseInt(match24[2], 10);
+  }
+
+  const sessionStartMinutes = hours * 60 + minutes;
+  const currentMinutes = now.getHours() * 60 + now.getMinutes();
+  return currentMinutes >= sessionStartMinutes;
+};
 
 const Sessions = () => {
   const navigate = useNavigate();
@@ -51,6 +87,13 @@ const Sessions = () => {
   const [isScheduleModalOpen, setIsScheduleModalOpen] = useState(false);
   const [cancelModalSession, setCancelModalSession] = useState(null);
   const [cancelReason, setCancelReason] = useState('');
+  const [isReviewModalOpen, setIsReviewModalOpen] = useState(false);
+  const [reviewModalSession, setReviewModalSession] = useState(null);
+
+  const handleOpenReviewModal = (session) => {
+    setReviewModalSession(session);
+    setIsReviewModalOpen(true);
+  };
 
   // Accepted exchanges for scheduling
   const [acceptedExchanges, setAcceptedExchanges] = useState([]);
@@ -618,11 +661,13 @@ const Sessions = () => {
                         <div className="flex items-center gap-1.5 flex-wrap">
                           <span className="participant-role-tag">Mentor / Teacher</span>
                           <span className="font-mono text-[10px] text-slate-500 font-semibold">
-                            {session.teacherStudentId || (session.teacher === user.name ? user.studentId : 'STU002')}
+                            {session.teacherStudentId || (session.TeacherID ? `STU${String(session.TeacherID).padStart(3, '0')}` : (session.teacher === user.name ? user.studentId : ''))}
                           </span>
                         </div>
                         <div className="participant-name">
-                          <span>{session.teacher}</span>
+                          <span>
+                            {session.teacher} {session.teacherStudentId ? `(${session.teacherStudentId})` : (session.TeacherID ? `(STU${String(session.TeacherID).padStart(3, '0')})` : '')}
+                          </span>
                           {session.teacher === user.name && (
                             <span className="participant-you-tag">You</span>
                           )}
@@ -649,11 +694,13 @@ const Sessions = () => {
                         <div className="flex items-center gap-1.5 flex-wrap">
                           <span className="participant-role-tag">Mentee / Learner</span>
                           <span className="font-mono text-[10px] text-slate-500 font-semibold">
-                            {session.learnerStudentId || (session.learner === user.name ? user.studentId : 'STU001')}
+                            {session.learnerStudentId || (session.LearnerID ? `STU${String(session.LearnerID).padStart(3, '0')}` : (session.learner === user.name ? user.studentId : ''))}
                           </span>
                         </div>
                         <div className="participant-name">
-                          <span>{session.learner}</span>
+                          <span>
+                            {session.learner} {session.learnerStudentId ? `(${session.learnerStudentId})` : (session.LearnerID ? `(STU${String(session.LearnerID).padStart(3, '0')})` : '')}
+                          </span>
                           {session.learner === user.name && (
                             <span className="participant-you-tag">You</span>
                           )}
@@ -763,20 +810,22 @@ const Sessions = () => {
                     <div className="session-right-actions">
                       {isUpcoming && (
                         <>
-                          <button
-                            onClick={() => handleMarkCompleted(session)}
-                            className="btn btn-outline"
-                            style={{
-                              color: '#15803d',
-                              borderColor: '#1A1A2E',
-                              backgroundColor: '#ecfdf5',
-                              padding: '0.45rem 0.85rem'
-                            }}
-                            title="Mark this session as successfully completed"
-                          >
-                            <CheckCircle2 size={15} />
-                            <span>Mark Completed</span>
-                          </button>
+                          {isUserTeaching && isSessionStartTimePassed(session) && (
+                            <button
+                              onClick={() => handleMarkCompleted(session)}
+                              className="btn btn-outline"
+                              style={{
+                                color: '#15803d',
+                                borderColor: '#1A1A2E',
+                                backgroundColor: '#ecfdf5',
+                                padding: '0.45rem 0.85rem'
+                              }}
+                              title="Mark this session as successfully completed"
+                            >
+                              <CheckCircle2 size={15} />
+                              <span>Mark Completed</span>
+                            </button>
+                          )}
 
                           <button
                             onClick={() => handleOpenCancelModal(session)}
@@ -794,24 +843,38 @@ const Sessions = () => {
                       )}
 
                       {isCompleted && (
-                        <button
-                          onClick={() => {
-                            setScheduleForm({
-                              ...scheduleForm,
-                              skill: session.skill,
-                              partnerName: session.partnerName,
-                              partnerDept: session.partnerDept || '',
-                              userRole: session.userRole || 'Teacher',
-                              topic: `Follow-up: Advanced ${session.skill}`
-                            });
-                            setIsScheduleModalOpen(true);
-                          }}
-                          className="btn btn-outline-primary"
-                          style={{ padding: '0.45rem 0.85rem' }}
-                        >
-                          <Plus size={14} />
-                          <span>Schedule Follow-Up</span>
-                        </button>
+                        <>
+                          {!session.hasReviewed && (
+                            <button
+                              type="button"
+                              onClick={() => handleOpenReviewModal(session)}
+                              className="btn btn-primary"
+                              style={{ padding: '0.45rem 0.85rem' }}
+                              title="Leave a review for this completed session"
+                            >
+                              <Star size={14} fill="#ffffff" />
+                              <span>Leave review</span>
+                            </button>
+                          )}
+                          <button
+                            onClick={() => {
+                              setScheduleForm({
+                                ...scheduleForm,
+                                skill: session.skill,
+                                partnerName: session.partnerName,
+                                partnerDept: session.partnerDept || '',
+                                userRole: session.userRole || 'Teacher',
+                                topic: `Follow-up: Advanced ${session.skill}`
+                              });
+                              setIsScheduleModalOpen(true);
+                            }}
+                            className="btn btn-outline-primary"
+                            style={{ padding: '0.45rem 0.85rem' }}
+                          >
+                            <Plus size={14} />
+                            <span>Schedule Follow-Up</span>
+                          </button>
+                        </>
                       )}
 
                       {isCancelled && (
@@ -1242,6 +1305,18 @@ const Sessions = () => {
             </div>
           </div>
         )}
+        {/* Review Modal popup */}
+        <ReviewModal
+          isOpen={isReviewModalOpen}
+          onClose={() => {
+            setIsReviewModalOpen(false);
+            setReviewModalSession(null);
+          }}
+          preselectedExchangeId={reviewModalSession?.exchangeId || reviewModalSession?.ExchangeID}
+          preselectedSessionId={reviewModalSession?.sessionId || reviewModalSession?.SessionID}
+          preselectedRole={reviewModalSession?.userRole || (reviewModalSession?.teacher === user?.name ? 'Teacher' : 'Learner')}
+          onReviewSubmitted={refreshSessions}
+        />
       </div>
     </div>
   );
