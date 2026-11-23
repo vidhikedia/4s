@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useCallback } from 'react';
+import { createPortal } from 'react-dom';
 import { Link, useNavigate } from 'react-router-dom';
 import {
   BookmarkPlus,
@@ -49,6 +50,24 @@ const LearningRequests = () => {
       setToastMessage(null);
     }, 4500);
   };
+
+  useEffect(() => {
+    if (!modalOpen) return;
+    const prevOverflow = document.body.style.overflow;
+    document.body.style.overflow = 'hidden';
+
+    const handleKeyDown = (e) => {
+      if (e.key === 'Escape') {
+        setModalOpen(false);
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+
+    return () => {
+      document.body.style.overflow = prevOverflow;
+      window.removeEventListener('keydown', handleKeyDown);
+    };
+  }, [modalOpen]);
 
   const fetchRequests = useCallback(async () => {
     const studentId = user?.id || user?.StudentID || user?.studentId;
@@ -227,13 +246,25 @@ const LearningRequests = () => {
   // Filter requests by status tab
   const filteredRequests = statusFilter === 'All'
     ? requests
-    : requests.filter((r) => (r.status || 'Open').toLowerCase() === statusFilter.toLowerCase());
+    : requests.filter((r) => {
+        const s = (r.status || 'Open').toLowerCase();
+        if (statusFilter.toLowerCase() === 'open') {
+          return s === 'open' || s === 'pending';
+        }
+        if (statusFilter.toLowerCase() === 'matched') {
+          return s === 'matched' || s === 'accepted';
+        }
+        return s === statusFilter.toLowerCase();
+      });
 
   const selectableCategories = ALL_CATEGORIES.filter((c) => c !== 'All');
 
   // Stats calculation
-  const openCount = requests.filter((r) => (r.status || 'Open') === 'Open').length;
-  const matchedCount = requests.filter((r) => r.status === 'Matched').length;
+  const openCount = requests.filter((r) => {
+    const s = r.status || 'Open';
+    return s === 'Open' || s === 'Pending';
+  }).length;
+  const matchedCount = requests.filter((r) => r.status === 'Matched' || r.status === 'Accepted').length;
   const completedCount = requests.filter((r) => r.status === 'Completed').length;
 
   return (
@@ -378,7 +409,7 @@ const LearningRequests = () => {
                       <div className="request-tags-left">
                         <span className="skill-category-badge">{req.category}</span>
                         <span className={`status-pill status-${status.toLowerCase()}`}>
-                          {status}
+                          {status === 'Pending' ? 'Awaiting reply' : status}
                         </span>
                         <span className={`priority-badge priority-${priority.toLowerCase()}`}>
                           <span className="priority-pulse-dot" aria-hidden="true"></span>
@@ -409,7 +440,7 @@ const LearningRequests = () => {
                     </div>
 
                     <div className="flex items-center gap-2 flex-wrap my-1.5 text-xs">
-                      {req.status === 'Matched' ? (
+                      {req.status === 'Matched' || req.status === 'Accepted' ? (
                         <AnimeIdChip
                           id={req.learningId}
                           type="LRN"
@@ -493,177 +524,191 @@ const LearningRequests = () => {
       {/* ------------------------------------------------------------------
           Add / Edit Learning Request Modal
           ------------------------------------------------------------------ */}
-      {modalOpen && (
-        <div className="modal-overlay" onClick={() => setModalOpen(false)}>
-          <div className="modal-card" style={{ maxWidth: '580px' }} onClick={(e) => e.stopPropagation()}>
-            <form onSubmit={handleSubmit}>
-              <div className="modal-header">
-                <h3>{editingRequest ? 'Edit Learning Request' : 'Create Learning Request'}</h3>
-                <button
-                  type="button"
-                  className="modal-close-btn"
-                  onClick={() => setModalOpen(false)}
-                  aria-label="Close modal"
-                >
-                  <X size={20} />
-                </button>
-              </div>
+      {modalOpen &&
+        createPortal(
+          <div className="modal-overlay" onClick={() => setModalOpen(false)}>
+            <div
+              className="modal-card"
+              style={{
+                maxWidth: '580px',
+                width: '100%',
+                maxHeight: 'calc(100vh - 2rem)',
+                maxHeight: 'calc(100dvh - 2rem)',
+                display: 'flex',
+                flexDirection: 'column',
+                overflow: 'hidden'
+              }}
+              onClick={(e) => e.stopPropagation()}
+            >
+              <form onSubmit={handleSubmit} style={{ display: 'flex', flexDirection: 'column', flex: 1, minHeight: 0, overflow: 'hidden' }}>
+                <div className="modal-header" style={{ flexShrink: 0 }}>
+                  <h3>{editingRequest ? 'Edit Learning Request' : 'Create Learning Request'}</h3>
+                  <button
+                    type="button"
+                    className="modal-close-btn"
+                    onClick={() => setModalOpen(false)}
+                    aria-label="Close modal"
+                  >
+                    <X size={20} />
+                  </button>
+                </div>
 
-              <div className="modal-body">
-                {/* Skill Name */}
-                <div className="form-group">
-                  <label className="form-label" htmlFor="req-name">
-                    Skill You Want to Learn
-                  </label>
-                  <input
-                    id="req-name"
-                    type="text"
-                    className={`form-input ${formErrors.name ? 'input-error' : ''}`}
-                    placeholder="e.g. Machine Learning with Scikit-Learn, Docker Basics, C Pointers"
-                    value={formData.name}
-                    onChange={(e) => {
-                      setFormData({ ...formData, name: e.target.value });
-                      if (formErrors.name) setFormErrors({ ...formErrors, name: null });
-                    }}
-                  />
-                  {formErrors.name && <span className="form-error-msg">{formErrors.name}</span>}
+                <div className="modal-body" style={{ flex: 1, overflowY: 'auto', minHeight: 0 }}>
+                  {/* Skill Name */}
+                  <div className="form-group">
+                    <label className="form-label" htmlFor="req-name">
+                      Skill You Want to Learn
+                    </label>
+                    <input
+                      id="req-name"
+                      type="text"
+                      className={`form-input ${formErrors.name ? 'input-error' : ''}`}
+                      placeholder="e.g. Machine Learning with Scikit-Learn, Docker Basics, C Pointers"
+                      value={formData.name}
+                      onChange={(e) => {
+                        setFormData({ ...formData, name: e.target.value });
+                        if (formErrors.name) setFormErrors({ ...formErrors, name: null });
+                      }}
+                    />
+                    {formErrors.name && <span className="form-error-msg">{formErrors.name}</span>}
 
-                  {/* ID Relationship & Auto-Resolution Preview */}
-                  <div className="p-3 bg-slate-50 border border-slate-200 rounded-lg text-xs space-y-1.5 my-3">
-                    <div className="flex items-center justify-between">
-                      <span className="font-semibold text-slate-700">Course Identifier (Shared):</span>
-                      <span className="font-mono font-bold text-emerald-700 bg-emerald-50 px-2 py-0.5 rounded border border-emerald-200">
-                        {formData.name.trim() ? resolveOrAddCourse(formData.name, formData.category) : (editingRequest?.courseId || 'CRS001')}
-                      </span>
+                    {/* ID Relationship & Auto-Resolution Preview */}
+                    <div className="p-3 bg-slate-50 border border-slate-200 rounded-lg text-xs space-y-1.5 my-3">
+                      <div className="flex items-center justify-between">
+                        <span className="font-semibold text-slate-700">Course Identifier (Shared):</span>
+                        <span className="font-mono font-bold text-emerald-700 bg-emerald-50 px-2 py-0.5 rounded border border-emerald-200">
+                          {formData.name.trim() ? resolveOrAddCourse(formData.name, formData.category) : (editingRequest?.courseId || 'CRS001')}
+                        </span>
+                      </div>
+                      <p className="text-slate-500 text-[11px] leading-tight">
+                        Shared Course ID used across all students. The matching engine connects your Learning ID with peer mentors teaching this Course ID.
+                      </p>
+                      <div className="flex items-center justify-between pt-1 border-t border-slate-200">
+                        <span className="font-semibold text-slate-700">Learning Record ID:</span>
+                        <span className="font-mono font-bold text-blue-700 bg-blue-50 px-2 py-0.5 rounded border border-blue-200">
+                          {editingRequest ? (editingRequest.learningId || editingRequest.id) : 'Auto-generated upon save (e.g. LRN...)'}
+                        </span>
+                      </div>
                     </div>
-                    <p className="text-slate-500 text-[11px] leading-tight">
-                      Shared Course ID used across all students. The matching engine connects your Learning ID with peer mentors teaching this Course ID.
-                    </p>
-                    <div className="flex items-center justify-between pt-1 border-t border-slate-200">
-                      <span className="font-semibold text-slate-700">Learning Record ID:</span>
-                      <span className="font-mono font-bold text-blue-700 bg-blue-50 px-2 py-0.5 rounded border border-blue-200">
-                        {editingRequest ? (editingRequest.learningId || editingRequest.id) : 'Auto-generated upon save (e.g. LRN...)'}
-                      </span>
+                  </div>
+
+                  {/* Category & Status (Grid) */}
+                  <div className="modal-form-grid">
+                    <div className="form-group">
+                      <label className="form-label" htmlFor="req-category">
+                        Category
+                      </label>
+                      <select
+                        id="req-category"
+                        className="form-input"
+                        value={formData.category}
+                        onChange={(e) => setFormData({ ...formData, category: e.target.value })}
+                      >
+                        {selectableCategories.map((c) => (
+                          <option key={c} value={c}>
+                            {c}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+
+                    <div className="form-group">
+                      <label className="form-label" htmlFor="req-status">
+                        Request Status
+                      </label>
+                      <select
+                        id="req-status"
+                        className="form-input"
+                        value={formData.status}
+                        onChange={(e) => setFormData({ ...formData, status: e.target.value })}
+                      >
+                        {STATUS_OPTIONS.map((st) => (
+                          <option key={st} value={st}>
+                            {st}
+                          </option>
+                        ))}
+                      </select>
                     </div>
                   </div>
-                </div>
 
-                {/* Category & Status (Grid) */}
-                <div className="modal-form-grid">
-                  <div className="form-group">
-                    <label className="form-label" htmlFor="req-category">
-                      Category
-                    </label>
-                    <select
-                      id="req-category"
-                      className="form-input"
-                      value={formData.category}
-                      onChange={(e) => setFormData({ ...formData, category: e.target.value })}
-                    >
-                      {selectableCategories.map((c) => (
-                        <option key={c} value={c}>
-                          {c}
-                        </option>
-                      ))}
-                    </select>
+                  {/* Current Level & Preferred Level (Grid) */}
+                  <div className="modal-form-grid">
+                    <div className="form-group">
+                      <label className="form-label" htmlFor="req-curr-level">
+                        Your Current Skill Level
+                      </label>
+                      <select
+                        id="req-curr-level"
+                        className="form-input"
+                        value={formData.currentLevel}
+                        onChange={(e) => setFormData({ ...formData, currentLevel: e.target.value })}
+                      >
+                        {CURRENT_LEVEL_OPTIONS.map((lvl) => (
+                          <option key={lvl} value={lvl}>
+                            {lvl}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+
+                    <div className="form-group">
+                      <label className="form-label" htmlFor="req-pref-level">
+                        Preferred Target Level
+                      </label>
+                      <select
+                        id="req-pref-level"
+                        className="form-input"
+                        value={formData.preferredLevel}
+                        onChange={(e) => setFormData({ ...formData, preferredLevel: e.target.value })}
+                      >
+                        {PREFERRED_LEVEL_OPTIONS.map((lvl) => (
+                          <option key={lvl} value={lvl}>
+                            {lvl}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
                   </div>
 
+                  {/* Short Learning Goal Description */}
                   <div className="form-group">
-                    <label className="form-label" htmlFor="req-status">
-                      Request Status
+                    <label className="form-label" htmlFor="req-goal">
+                      Short Learning Goal & Context
                     </label>
-                    <select
-                      id="req-status"
-                      className="form-input"
-                      value={formData.status}
-                      onChange={(e) => setFormData({ ...formData, status: e.target.value })}
-                    >
-                      {STATUS_OPTIONS.map((st) => (
-                        <option key={st} value={st}>
-                          {st}
-                        </option>
-                      ))}
-                    </select>
-                  </div>
-                </div>
-
-                {/* Current Level & Preferred Level (Grid) */}
-                <div className="modal-form-grid">
-                  <div className="form-group">
-                    <label className="form-label" htmlFor="req-curr-level">
-                      Your Current Skill Level
-                    </label>
-                    <select
-                      id="req-curr-level"
-                      className="form-input"
-                      value={formData.currentLevel}
-                      onChange={(e) => setFormData({ ...formData, currentLevel: e.target.value })}
-                    >
-                      {CURRENT_LEVEL_OPTIONS.map((lvl) => (
-                        <option key={lvl} value={lvl}>
-                          {lvl}
-                        </option>
-                      ))}
-                    </select>
-                  </div>
-
-                  <div className="form-group">
-                    <label className="form-label" htmlFor="req-pref-level">
-                      Preferred Target Level
-                    </label>
-                    <select
-                      id="req-pref-level"
-                      className="form-input"
-                      value={formData.preferredLevel}
-                      onChange={(e) => setFormData({ ...formData, preferredLevel: e.target.value })}
-                    >
-                      {PREFERRED_LEVEL_OPTIONS.map((lvl) => (
-                        <option key={lvl} value={lvl}>
-                          {lvl}
-                        </option>
-                      ))}
-                    </select>
+                    <textarea
+                      id="req-goal"
+                      rows={4}
+                      className={`form-input ${formErrors.targetGoal ? 'input-error' : ''}`}
+                      placeholder="Describe why you want to learn this skill, upcoming coursework requirements, or specific projects you plan to build..."
+                      value={formData.targetGoal}
+                      onChange={(e) => {
+                        setFormData({ ...formData, targetGoal: e.target.value });
+                        if (formErrors.targetGoal) setFormErrors({ ...formErrors, targetGoal: null });
+                      }}
+                    />
+                    {formErrors.targetGoal && (
+                      <span className="form-error-msg">{formErrors.targetGoal}</span>
+                    )}
                   </div>
                 </div>
 
-                {/* Short Learning Goal Description */}
-                <div className="form-group">
-                  <label className="form-label" htmlFor="req-goal">
-                    Short Learning Goal & Context
-                  </label>
-                  <textarea
-                    id="req-goal"
-                    rows={4}
-                    className={`form-input ${formErrors.targetGoal ? 'input-error' : ''}`}
-                    placeholder="Describe why you want to learn this skill, upcoming coursework requirements, or specific projects you plan to build..."
-                    value={formData.targetGoal}
-                    onChange={(e) => {
-                      setFormData({ ...formData, targetGoal: e.target.value });
-                      if (formErrors.targetGoal) setFormErrors({ ...formErrors, targetGoal: null });
-                    }}
-                  />
-                  {formErrors.targetGoal && (
-                    <span className="form-error-msg">{formErrors.targetGoal}</span>
-                  )}
+                <div className="modal-footer" style={{ flexShrink: 0 }}>
+                  <button
+                    type="button"
+                    className="btn btn-outline"
+                    onClick={() => setModalOpen(false)}
+                  >
+                    Cancel
+                  </button>
+                  <button type="submit" className="btn btn-primary">
+                    {editingRequest ? 'Save Changes' : 'Post Request'}
+                  </button>
                 </div>
-              </div>
-
-              <div className="modal-footer">
-                <button
-                  type="button"
-                  className="btn btn-outline"
-                  onClick={() => setModalOpen(false)}
-                >
-                  Cancel
-                </button>
-                <button type="submit" className="btn btn-primary">
-                  {editingRequest ? 'Save Changes' : 'Post Request'}
-                </button>
-              </div>
-            </form>
-          </div>
-        </div>
-      )}
+              </form>
+            </div>
+          </div>,
+          document.body
+        )}
 
       {/* ------------------------------------------------------------------
           Delete Confirmation Dialog

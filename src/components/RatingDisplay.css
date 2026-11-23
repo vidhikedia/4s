@@ -1,0 +1,37 @@
+.rating-chip-new,
+.leaderboard-chip.chip-new,
+.chip-new {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+  padding: 0.2rem 0.55rem;
+  border: 2px solid var(--ink, #1A1A2E);
+  border-radius: 6px;
+  font-family: var(--font-body, 'Nunito', sans-serif);
+  font-size: 0.72rem;
+  font-weight: 800;
+  box-shadow: 2px 2px 0 var(--ink, #1A1A2E);
+  white-space: nowrap;
+  background-color: #E2E8F0;
+  color: #475569;
+  line-height: 1.2;
+}
+
+.rating-display-wrap {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  font-weight: 700;
+  white-space: nowrap;
+}
+
+.rating-display-wrap .rating-text-val {
+  color: #1A1A2E;
+  font-size: 0.85rem;
+}
+
+.rating-display-wrap .rating-count-val {
+  color: #64748B;
+  font-size: 0.75rem;
+  font-weight: 600;
+}

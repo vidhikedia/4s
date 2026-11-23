@@ -1,4 +1,5 @@
 import React, { useState, useMemo, useEffect, useRef } from 'react';
+import { createPortal } from 'react-dom';
 import { useSearchParams, Link, useNavigate } from 'react-router-dom';
 import {
   Users,
@@ -23,7 +24,6 @@ import {
   GraduationCap
 } from 'lucide-react';
 import {
-  SAMPLE_PEER_MATCHES,
   ALL_CATEGORIES,
   doesStudentOfferSkill,
   getStudentOfferedSkills,
@@ -45,7 +45,8 @@ import MatchFoundAnimation from '../components/MatchFoundAnimation.jsx';
 import MangaCard from '../components/MangaCard.jsx';
 import PowerLevelMeter from '../components/PowerLevelMeter.jsx';
 import AnimeIdChip from '../components/AnimeIdChip.jsx';
-import { getOrAssignTeacherCourse, buildLearningId } from '../utils/idEngine.js';
+import RatingDisplay from '../components/RatingDisplay.jsx';
+import { getOrAssignTeacherCourse, buildLearningId, buildTeachingId } from '../utils/idEngine.js';
 import { getCategoryAccentColor } from '../utils/categoryColors.js';
 import { resetScrollToTop } from '../utils/useScrollToTop.js';
 import RequestsPanel from '../components/RequestsPanel.jsx';
@@ -148,8 +149,20 @@ const Matches = () => {
           if (c) c.scrollTop = 0;
         });
       });
+
+      const handleKeyDown = (e) => {
+        if (e.key === 'Escape') {
+          setProfileModalPeer(null);
+          setMessageModalPeer(null);
+          setSessionModalPeer(null);
+          setMatchPopupData(null);
+        }
+      };
+      window.addEventListener('keydown', handleKeyDown);
+
       return () => {
         document.body.style.overflow = prevOverflow;
+        window.removeEventListener('keydown', handleKeyDown);
       };
     } else {
       document.body.style.overflow = '';
@@ -237,7 +250,9 @@ const Matches = () => {
           dept: r.dept || 'Engineering',
           avatar: r.avatar || ((r.name || 'ST').split(/\s+/).map((p) => p[0]).join('').slice(0, 2).toUpperCase()),
           avatarBg: r.avatarBg || 'avatar-indigo',
-          rating: r.rating || '5.0',
+          rating: r.rating != null ? r.rating : null,
+          reviewsCount: r.reviewsCount || 0,
+          reviewCount: r.reviewCount ?? r.reviewsCount ?? 0,
           sessionsDelivered: r.sessionsDelivered != null ? r.sessionsDelivered : 12,
           skillOffered: skillName,
           teachSkill: skillName,
@@ -248,57 +263,6 @@ const Matches = () => {
           wantsToLearn: r.wantsToLearn || '',
           mutualSwap: Boolean(r.mutualSwap || r.mutualSwapAvailable),
           peerOriginal: r
-        };
-      });
-    } else {
-      // Safe fallback from SAMPLE_PEER_MATCHES if backend has not returned matches yet
-      pool = SAMPLE_PEER_MATCHES.filter((p) => p.studentId !== currentStudentId).map((p, idx) => {
-        const rec = p.teachingRecords?.[0] || {
-          teachingId: p.teachingId || `TCH00${idx + 1}`,
-          courseId: p.courseId || `CRS00${idx + 1}`,
-          skillName: p.skillOffered || 'Skill',
-          category: p.category || 'General',
-          proficiency: p.proficiencyLevel || 'Advanced',
-          availability: p.availability || 'Flexible Schedule'
-        };
-        const courseName = rec.skillName || p.skillOffered || 'Skill';
-        return {
-          matchId: `MAT_ALL_${rec.teachingId}`,
-          Match_ID: `MAT_ALL_${rec.teachingId}`,
-          studentId: currentStudentId,
-          teacherStudentId: p.studentId,
-          Student_ID: p.studentId,
-          teacherId: Number(String(p.studentId || '').replace(/\D/g, '')) || idx + 2,
-          skillId: idx + 1,
-          learningId: 'LRN001',
-          teachingId: rec.teachingId,
-          SS_ID: rec.teachingId,
-          courseId: rec.courseId,
-          courseName,
-          score: p.compatibilityScore || 88,
-          Match_Score: p.compatibilityScore || 88,
-          matchReasons: [
-            `Campus Peer Mentor: ${p.name || 'Peer'}`,
-            `Offers ${rec.skillName} (${rec.courseId})`
-          ],
-          status: 'Suggested',
-          peerId: p.id,
-          name: p.name || 'Campus Peer',
-          dept: p.dept || 'Engineering',
-          avatar: p.avatar || 'SP',
-          avatarBg: p.avatarBg || 'avatar-indigo',
-          rating: p.rating || '5.0',
-          sessionsDelivered: p.sessionsDelivered || 10,
-          skillOffered: rec.skillName,
-          teachSkill: rec.skillName,
-          category: rec.category,
-          proficiencyLevel: rec.proficiency || p.proficiencyLevel || 'Advanced',
-          availability: rec.availability || p.availability || 'Flexible Schedule',
-          bio: p.bio || '',
-          wantsToLearn: p.wantsToLearn || '',
-          mutualSwap: Boolean(p.mutualSwapAvailable),
-          teachingRecord: rec,
-          peerOriginal: p
         };
       });
     }
@@ -448,28 +412,17 @@ const Matches = () => {
     }
 
     setSessionModalPeer(null);
-    showToast(`Request sent to ${bookedMatch.name}. You will be notified when they accept.`);
+    showToast(`Request sent. Awaiting ${bookedMatch.name}'s reply.`);
 
-    // Trigger Real Match Handshake Popup with real learner, teacher, skill and score
+    // Trigger Match Handshake Popup with real learner, teacher, skill and score
     setMatchPopupData({
       teacherName: bookedMatch.name,
       learnerName: (user?.name || 'You').split(' ')[0],
       teacherSkill: bookedMatch.skillOffered,
       learnerSkill: bookedMatch.wantsToLearn || bookedMatch.skillOffered,
-      score: bookedMatch.Match_Score || bookedMatch.score || 94
+      score: bookedMatch.Match_Score || bookedMatch.score || 94,
+      isRequestPending: true
     });
-  };
-
-  const handleAcceptExchange = async (exchangeId) => {
-    const studentId = user?.id || user?.StudentID || user?.studentId;
-    await api.exchanges.updateStatus(exchangeId, 'Accepted', { studentId: normalizeStudentId(studentId) });
-    await fetchMatchesData();
-  };
-
-  const handleRejectExchange = async (exchangeId) => {
-    const studentId = user?.id || user?.StudentID || user?.studentId;
-    await api.exchanges.updateStatus(exchangeId, 'Rejected', { studentId: normalizeStudentId(studentId) });
-    await fetchMatchesData();
   };
 
   const handleResetFilters = () => {
@@ -706,7 +659,8 @@ const Matches = () => {
                     {/* Single Learning ID (names both person and course) */}
                     {(() => {
                       const peerStuId = match.Student_ID || match.studentId || match.peerStudentId || 'STU004';
-                      const teacherTcr = getOrAssignTeacherCourse(peerStuId, match.teachSkill || match.name);
+                      const cSeq = match.skillId || (match.courseId ? match.courseId.replace(/\D/g, '') : null);
+                      const teacherTcr = cSeq ? buildTeachingId(peerStuId, cSeq) : getOrAssignTeacherCourse(peerStuId, match.teachSkill || match.name);
                       const matchLearningId = buildLearningId(user?.studentId || 'STU001', teacherTcr);
 
                       return (
@@ -751,10 +705,7 @@ const Matches = () => {
                           <h3>{match.name}</h3>
                           <p>{match.dept}</p>
                           <div className="flex items-center gap-1.5 mt-0.5">
-                            <span className="flex items-center text-amber-500 font-bold text-xs">
-                              <Star size={12} fill="#f59e0b" />
-                              <span className="ml-1 text-slate-800">{match.rating}</span>
-                            </span>
+                            <RatingDisplay rating={match.rating} reviewCount={match.reviewsCount ?? match.reviewCount} starSize={12} />
                             <span className="text-xs text-muted">
                               · {match.sessionsDelivered} sessions delivered
                             </span>
@@ -925,10 +876,7 @@ const Matches = () => {
                     <h4 className="text-lg font-bold text-slate-900">{profileModalPeer.name}</h4>
                     <p className="text-sm text-muted">{profileModalPeer.dept}</p>
                     <div className="flex items-center gap-2 mt-1">
-                      <span className="flex items-center text-amber-500 font-bold text-xs">
-                        <Star size={13} fill="#f59e0b" />
-                        <span className="ml-1 text-slate-800">{profileModalPeer.rating} Peer Rating</span>
-                      </span>
+                      <RatingDisplay rating={profileModalPeer.rating} reviewCount={profileModalPeer.reviewsCount ?? profileModalPeer.reviewCount} starSize={13} />
                       <span className="text-xs text-muted">· {profileModalPeer.sessionsDelivered} sessions taught</span>
                     </div>
                   </div>
@@ -1009,7 +957,7 @@ const Matches = () => {
                 }}
               >
                 <Calendar size={14} />
-                <span>Schedule Session</span>
+                <span>Request Session</span>
               </button>
             </div>
           </div>
@@ -1091,120 +1039,134 @@ const Matches = () => {
       {/* ------------------------------------------------------------------
           Modal 3: Request a Session
           ------------------------------------------------------------------ */}
-      {sessionModalPeer && (
-        <div className="modal-overlay" onClick={() => setSessionModalPeer(null)}>
-          <div className="modal-card" style={{ maxWidth: '540px' }} onClick={(e) => e.stopPropagation()}>
-            <form onSubmit={handleScheduleSubmit}>
-              <div className="modal-header">
-                <h3>Request Study Session with {sessionModalPeer.name}</h3>
-                <button
-                  type="button"
-                  className="modal-close-btn"
-                  onClick={() => setSessionModalPeer(null)}
-                >
-                  <X size={20} />
-                </button>
-              </div>
+      {sessionModalPeer &&
+        createPortal(
+          <div className="modal-overlay" onClick={() => setSessionModalPeer(null)}>
+            <div
+              className="modal-card"
+              style={{
+                maxWidth: '540px',
+                width: '100%',
+                maxHeight: 'calc(100vh - 2rem)',
+                maxHeight: 'calc(100dvh - 2rem)',
+                display: 'flex',
+                flexDirection: 'column',
+                overflow: 'hidden'
+              }}
+              onClick={(e) => e.stopPropagation()}
+            >
+              <form onSubmit={handleScheduleSubmit} style={{ display: 'flex', flexDirection: 'column', flex: 1, minHeight: 0, overflow: 'hidden' }}>
+                <div className="modal-header" style={{ flexShrink: 0 }}>
+                  <h3>Request Skill Exchange with {sessionModalPeer.name}</h3>
+                  <button
+                    type="button"
+                    className="modal-close-btn"
+                    onClick={() => setSessionModalPeer(null)}
+                  >
+                    <X size={20} />
+                  </button>
+                </div>
 
-              <div className="modal-body">
-                {/* Session Mentor Summary */}
-                <div style={{ backgroundColor: '#f8fafc', padding: '0.875rem 1rem', borderRadius: '0.5rem', border: '1px solid var(--border-color)' }}>
-                  <span className="text-xs text-muted">Matched Peer Mentor:</span>
-                  <h4 className="text-base font-bold text-slate-900">{sessionModalPeer.name}</h4>
-                  <div className="flex items-center gap-2 mt-1">
-                    <span className="badge-id badge-teaching-id">Teaching ID: {sessionModalPeer.teachingId}</span>
-                    <span className="badge-id badge-course-id">Course ID: {sessionModalPeer.courseId}</span>
+                <div className="modal-body" style={{ flex: 1, overflowY: 'auto', minHeight: 0 }}>
+                  {/* Session Mentor Summary */}
+                  <div style={{ backgroundColor: '#f8fafc', padding: '0.875rem 1rem', borderRadius: '0.5rem', border: '1px solid var(--border-color)' }}>
+                    <span className="text-xs text-muted">Peer Mentor:</span>
+                    <h4 className="text-base font-bold text-slate-900">{sessionModalPeer.name}</h4>
+                    <div className="flex items-center gap-2 mt-1">
+                      <span className="badge-id badge-teaching-id">Teaching ID: {sessionModalPeer.teachingId}</span>
+                      <span className="badge-id badge-course-id">Course ID: {sessionModalPeer.courseId}</span>
+                    </div>
+                    <p className="text-xs text-primary font-semibold mt-1">
+                      Teaching: {sessionModalPeer.skillOffered} · Available: {sessionModalPeer.availability}
+                    </p>
                   </div>
-                  <p className="text-xs text-primary font-semibold mt-1">
-                    Teaching: {sessionModalPeer.skillOffered} · Available: {sessionModalPeer.availability}
-                  </p>
+
+                  {/* Session Topic */}
+                  <div className="form-group">
+                    <label className="form-label" htmlFor="sess-topic">
+                      Session Topic / Focus Area
+                    </label>
+                    <input
+                      id="sess-topic"
+                      type="text"
+                      className="form-input"
+                      value={sessionForm.topic}
+                      onChange={(e) => setSessionForm({ ...sessionForm, topic: e.target.value })}
+                      required
+                    />
+                  </div>
+
+                  {/* Date & Time */}
+                  <div className="form-group">
+                    <label className="form-label" htmlFor="sess-time">
+                      Proposed Date & Time Slot
+                    </label>
+                    <select
+                      id="sess-time"
+                      className="form-input"
+                      value={sessionForm.dateTime}
+                      onChange={(e) => setSessionForm({ ...sessionForm, dateTime: e.target.value })}
+                    >
+                      <option value="Tomorrow · 4:00 PM – 5:00 PM">Tomorrow · 4:00 PM – 5:00 PM</option>
+                      <option value="Thursday · 5:30 PM – 6:30 PM">Thursday · 5:30 PM – 6:30 PM</option>
+                      <option value="Friday · 5:00 PM – 6:00 PM">Friday · 5:00 PM – 6:00 PM</option>
+                      <option value="Saturday Morning · 10:30 AM – 11:30 AM">Saturday Morning · 10:30 AM – 11:30 AM</option>
+                      <option value="Sunday Afternoon · 3:00 PM – 4:00 PM">Sunday Afternoon · 3:00 PM – 4:00 PM</option>
+                    </select>
+                  </div>
+
+                  {/* Session Mode */}
+                  <div className="form-group">
+                    <label className="form-label" htmlFor="sess-mode">
+                      Meeting Mode
+                    </label>
+                    <select
+                      id="sess-mode"
+                      className="form-input"
+                      value={sessionForm.mode}
+                      onChange={(e) => setSessionForm({ ...sessionForm, mode: e.target.value })}
+                    >
+                      <option value="Google Meet">Google Meet (Online Video & Screen Share)</option>
+                      <option value="Campus Central Library">Campus Central Library (Study Room Table 2)</option>
+                      <option value="CS Department Lab">CS Department Lab (Workstation 14)</option>
+                      <option value="Hostel Common Room">Hostel Common Study Lounge</option>
+                    </select>
+                  </div>
+
+                  {/* Notes */}
+                  <div className="form-group">
+                    <label className="form-label" htmlFor="sess-notes">
+                      Agenda or Specific Questions
+                    </label>
+                    <textarea
+                      id="sess-notes"
+                      rows={3}
+                      className="form-input"
+                      value={sessionForm.notes}
+                      onChange={(e) => setSessionForm({ ...sessionForm, notes: e.target.value })}
+                      placeholder="List specific assignment problems or topics you'd like to cover..."
+                    />
+                  </div>
                 </div>
 
-                {/* Session Topic */}
-                <div className="form-group">
-                  <label className="form-label" htmlFor="sess-topic">
-                    Session Topic / Focus Area
-                  </label>
-                  <input
-                    id="sess-topic"
-                    type="text"
-                    className="form-input"
-                    value={sessionForm.topic}
-                    onChange={(e) => setSessionForm({ ...sessionForm, topic: e.target.value })}
-                    required
-                  />
-                </div>
-
-                {/* Date & Time */}
-                <div className="form-group">
-                  <label className="form-label" htmlFor="sess-time">
-                    Proposed Date & Time Slot
-                  </label>
-                  <select
-                    id="sess-time"
-                    className="form-input"
-                    value={sessionForm.dateTime}
-                    onChange={(e) => setSessionForm({ ...sessionForm, dateTime: e.target.value })}
+                <div className="modal-footer" style={{ flexShrink: 0 }}>
+                  <button
+                    type="button"
+                    className="btn btn-outline"
+                    onClick={() => setSessionModalPeer(null)}
                   >
-                    <option value="Tomorrow · 4:00 PM – 5:00 PM">Tomorrow · 4:00 PM – 5:00 PM</option>
-                    <option value="Thursday · 5:30 PM – 6:30 PM">Thursday · 5:30 PM – 6:30 PM</option>
-                    <option value="Friday · 5:00 PM – 6:00 PM">Friday · 5:00 PM – 6:00 PM</option>
-                    <option value="Saturday Morning · 10:30 AM – 11:30 AM">Saturday Morning · 10:30 AM – 11:30 AM</option>
-                    <option value="Sunday Afternoon · 3:00 PM – 4:00 PM">Sunday Afternoon · 3:00 PM – 4:00 PM</option>
-                  </select>
+                    Cancel
+                  </button>
+                  <button type="submit" className="btn btn-primary">
+                    <Calendar size={15} />
+                    <span>Send Request</span>
+                  </button>
                 </div>
-
-                {/* Session Mode */}
-                <div className="form-group">
-                  <label className="form-label" htmlFor="sess-mode">
-                    Meeting Mode
-                  </label>
-                  <select
-                    id="sess-mode"
-                    className="form-input"
-                    value={sessionForm.mode}
-                    onChange={(e) => setSessionForm({ ...sessionForm, mode: e.target.value })}
-                  >
-                    <option value="Google Meet">Google Meet (Online Video & Screen Share)</option>
-                    <option value="Campus Central Library">Campus Central Library (Study Room Table 2)</option>
-                    <option value="CS Department Lab">CS Department Lab (Workstation 14)</option>
-                    <option value="Hostel Common Room">Hostel Common Study Lounge</option>
-                  </select>
-                </div>
-
-                {/* Notes */}
-                <div className="form-group">
-                  <label className="form-label" htmlFor="sess-notes">
-                    Agenda or Specific Questions
-                  </label>
-                  <textarea
-                    id="sess-notes"
-                    rows={3}
-                    className="form-input"
-                    value={sessionForm.notes}
-                    onChange={(e) => setSessionForm({ ...sessionForm, notes: e.target.value })}
-                    placeholder="List specific assignment problems or topics you'd like to cover..."
-                  />
-                </div>
-              </div>
-
-              <div className="modal-footer">
-                <button
-                  type="button"
-                  className="btn btn-outline"
-                  onClick={() => setSessionModalPeer(null)}
-                >
-                  Cancel
-                </button>
-                <button type="submit" className="btn btn-primary">
-                  <Calendar size={15} />
-                  <span>Confirm & Schedule Session</span>
-                </button>
-              </div>
-            </form>
-          </div>
-        </div>
-      )}
+              </form>
+            </div>
+          </div>,
+          document.body
+        )}
 
       {/* Real Match Found Handshake Popup */}
       {matchPopupData && (
@@ -1217,6 +1179,7 @@ const Matches = () => {
           teacherSkill={matchPopupData.teacherSkill}
           learnerSkill={matchPopupData.learnerSkill}
           score={matchPopupData.score}
+          isRequestPending={matchPopupData.isRequestPending}
         />
       )}
     </div>

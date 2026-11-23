@@ -223,7 +223,12 @@ export default function AnimeIdChip({
   const displayId = getReadableId(record || id, effectiveType, record?.studentId);
 
   // Check if unmatched / awaiting teacher
-  const isAwaiting = displayId === AWAITING_TEACHER_ID || id === AWAITING_TEACHER_ID || (record && record.status === 'Open' && !record.teachingId && !record.teacherTcrId && !record.teacherStudentId && !record.teacherId && !record.TeacherID);
+  const isPending = record && record.status === 'Pending';
+  const isAwaiting =
+    isPending ||
+    displayId === AWAITING_TEACHER_ID ||
+    id === AWAITING_TEACHER_ID ||
+    (record && (record.status === 'Open' || (record.status !== 'Matched' && record.status !== 'Accepted' && (type === 'LRN' || record.type === 'LRN' || record.learningId || record.targetGoal))));
 
   // Parse new Learning ID format: LRN(\d{3,4})-TCR(\d{3,4})CRS(\d{3,4})
   const lrnFullMatch = !isAwaiting && displayId.match(/^LRN(\d{3,4})-TCR(\d{3,4})CRS(\d{3,4})$/);
@@ -246,9 +251,13 @@ export default function AnimeIdChip({
   };
 
   const decodedSentence = isAwaiting
-    ? (decodeContext.skillName
-      ? `Awaiting teacher for "${decodeContext.skillName}". Your Learning ID will be generated upon matching.`
-      : 'No teacher assigned yet. You will get a Learning ID once matched with a course.')
+    ? (isPending
+      ? (decodeContext.skillName
+        ? `Request sent for "${decodeContext.skillName}". Awaiting teacher's reply.`
+        : "Request sent. Awaiting teacher's reply.")
+      : (decodeContext.skillName
+        ? `Awaiting teacher for "${decodeContext.skillName}". Your Learning ID will be generated upon matching.`
+        : 'No teacher assigned yet. You will get a Learning ID once matched with a course.'))
     : decodeReadableId(displayId, decodeContext);
 
   const handleCopy = (e) => {
@@ -298,10 +307,12 @@ export default function AnimeIdChip({
         <span
           tabIndex={0}
           className={`anime-id-chip chip-awaiting chip-size-${size} ${className}`}
-          aria-label={`Awaiting teacher ${requestedSkill ? `for ${requestedSkill}` : ''}. ${decodedSentence}`}
+          aria-label={`${isPending ? 'Awaiting reply' : 'Awaiting teacher'} ${requestedSkill ? `for ${requestedSkill}` : ''}. ${decodedSentence}`}
         >
           <Clock size={11} className="text-slate-500 mr-1 flex-shrink-0" />
-          <span className="font-bold text-slate-700">Awaiting teacher</span>
+          <span className="font-bold text-slate-700">
+            {isPending ? 'Awaiting reply' : 'Awaiting teacher'}
+          </span>
           {requestedSkill && (
             <span className="text-slate-500 font-medium ml-1 text-[10px]">({requestedSkill})</span>
           )}

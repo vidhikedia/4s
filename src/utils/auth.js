@@ -97,7 +97,9 @@ export const DEFAULT_USER = {
       Years_of_Experience: 14,
       availability: 'Weekdays after 4 PM',
       learnersHelped: 14,
-      rating: 5.0,
+      rating: null,
+      reviewCount: 0,
+      reviewsCount: 0,
       description: 'Component lifecycles, custom hooks, state management, and responsive UI with Tailwind CSS.',
       Description: 'Component lifecycles, custom hooks, state management, and responsive UI with Tailwind CSS.'
     },
@@ -160,7 +162,9 @@ export const DEFAULT_USER = {
       Years_of_Experience: 8,
       availability: 'Flexible (Anytime)',
       learnersHelped: 8,
-      rating: 5.0,
+      rating: null,
+      reviewCount: 0,
+      reviewsCount: 0,
       description: 'Wireframing, auto-layout, design tokens, interactive components, and developer handoff.',
       Description: 'Wireframing, auto-layout, design tokens, interactive components, and developer handoff.'
     }
@@ -285,7 +289,9 @@ export const getStoredUser = () => {
       department: user.department || user.Department || '',
       year: user.year || user.YearOfStudy || '',
       bio: user.bio || user.Bio || '',
-      rating: user.rating != null ? String(user.rating) : '5.00',
+      rating: null,
+      reviewsCount: user.reviewsCount || 0,
+      reviewCount: user.reviewCount || user.reviewsCount || 0,
       sessionsTaught: user.sessionsTaught || 0,
       sessionsAttended: user.sessionsAttended || 0,
       skillsOffered: Array.isArray(user.skillsOffered)
@@ -324,7 +330,9 @@ export const saveUser = (userData) => {
     if (userData?.token) {
       localStorage.setItem('4s_auth_token', userData.token);
     }
-    localStorage.setItem('4s_active_user', JSON.stringify(userData));
+    const userToStore = { ...userData };
+    delete userToStore.rating;
+    localStorage.setItem('4s_active_user', JSON.stringify(userToStore));
     localStorage.setItem('4s_is_logged_in', 'true');
     window.dispatchEvent(new Event('4s_auth_change'));
   } catch (e) {
@@ -363,7 +371,9 @@ export const addUserSkill = (skill) => {
     proficiency: skill.level || skill.proficiency || skill.Proficiency_Level || 'Intermediate',
     Proficiency_Level: skill.level || skill.proficiency || skill.Proficiency_Level || 'Intermediate',
     level: skill.level || skill.proficiency || skill.Proficiency_Level || 'Intermediate',
-    rating: 5.0,
+    rating: null,
+    reviewCount: 0,
+    reviewsCount: 0,
     learnersHelped: 0,
     experience: Number(skill.experience || skill.Years_of_Experience || 0),
     Years_of_Experience: Number(skill.experience || skill.Years_of_Experience || 0),
@@ -783,7 +793,7 @@ export const addUserReview = (reviewData) => {
     sessionId: Session_ID,
     author: reviewData.author?.trim() || 'Fellow Campus Peer',
     authorRole: reviewData.authorRole || 'Learner',
-    rating: Number(reviewData.rating) || 5,
+    rating: Number(reviewData.rating) || 0,
     skill: reviewData.skill?.trim() || 'Peer Knowledge Exchange',
     sessionDate: reviewData.sessionDate || new Date().toISOString().split('T')[0],
     date: 'Just now',
@@ -794,8 +804,10 @@ export const addUserReview = (reviewData) => {
   user.recentReviews = updatedReviews;
 
   // Re-calculate user rating
-  const totalStars = updatedReviews.reduce((sum, r) => sum + (Number(r.rating) || 5), 0);
-  user.rating = (totalStars / updatedReviews.length).toFixed(2);
+  const totalStars = updatedReviews.reduce((sum, r) => sum + (Number(r.rating) || 0), 0);
+  user.rating = updatedReviews.length > 0 ? (totalStars / updatedReviews.length).toFixed(2) : null;
+  user.reviewsCount = updatedReviews.length;
+  user.reviewCount = updatedReviews.length;
 
   saveUser(user);
   return updatedReviews;
@@ -863,17 +875,39 @@ export const useAuth = () => {
     }
   }, [studentId]);
 
+  const refreshUser = useCallback(async () => {
+    if (!studentId) return;
+    try {
+      const fresh = await api.students.getById(studentId);
+      if (fresh && (fresh.StudentID || fresh.id)) {
+        setUser((prev) => ({
+          ...(prev || {}),
+          ...fresh,
+          rating: fresh.rating != null ? fresh.rating : null,
+          reviewsCount: fresh.reviewsCount || 0,
+          reviewCount: fresh.reviewCount || fresh.reviewsCount || 0,
+        }));
+      }
+    } catch (err) {
+      console.warn('Failed to refresh user profile from backend:', err);
+    }
+  }, [studentId]);
+
   useEffect(() => {
     const syncAuth = () => {
       const u = getStoredUser();
       setUser(u);
       setLoggedIn(isUserLoggedIn());
+      if (u?.id || u?.StudentID || u?.studentId) {
+        refreshUser();
+      }
     };
 
     window.addEventListener('4s_auth_change', syncAuth);
     window.addEventListener('4s_chat_change', refreshConversations);
     window.addEventListener('4s_sessions_change', refreshSessions);
     window.addEventListener('4s_availability_change', refreshAvailability);
+    window.addEventListener('4s_reviews_change', refreshUser);
     window.addEventListener('storage', syncAuth);
 
     return () => {
@@ -881,25 +915,29 @@ export const useAuth = () => {
       window.removeEventListener('4s_chat_change', refreshConversations);
       window.removeEventListener('4s_sessions_change', refreshSessions);
       window.removeEventListener('4s_availability_change', refreshAvailability);
+      window.removeEventListener('4s_reviews_change', refreshUser);
       window.removeEventListener('storage', syncAuth);
     };
-  }, [refreshConversations, refreshSessions, refreshAvailability]);
+  }, [refreshConversations, refreshSessions, refreshAvailability, refreshUser]);
 
   // Initial fetch and 10s polling for real backend synchronization
   useEffect(() => {
     if (!studentId) return;
 
+    refreshUser();
     refreshConversations();
     refreshSessions();
     refreshAvailability();
 
     const interval = setInterval(() => {
+      refreshUser();
       refreshConversations();
       refreshSessions();
       refreshAvailability();
     }, 10000);
 
     const onFocus = () => {
+      refreshUser();
       refreshConversations();
       refreshSessions();
       refreshAvailability();
@@ -910,7 +948,7 @@ export const useAuth = () => {
       clearInterval(interval);
       window.removeEventListener('focus', onFocus);
     };
-  }, [studentId, refreshConversations, refreshSessions, refreshAvailability]);
+  }, [studentId, refreshUser, refreshConversations, refreshSessions, refreshAvailability]);
 
   const safeUser = user || {
     id: '',
@@ -920,7 +958,9 @@ export const useAuth = () => {
     department: '',
     year: '',
     bio: '',
-    rating: '5.00',
+    rating: null,
+    reviewsCount: 0,
+    reviewCount: 0,
     sessionsTaught: 0,
     sessionsAttended: 0,
     skillsOffered: [],

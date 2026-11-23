@@ -629,13 +629,16 @@ export const findMatches = (requestIdOrObj, options = {}) => {
       else if (experienceVal >= 2) expScore = 6;
       else if (experienceVal >= 1) expScore = 4;
 
-      const ratingVal = parseFloat(offering.rating || peer.rating || '4.9');
-      let ratingScore = 3;
-      if (ratingVal >= 4.9) ratingScore = 5;
-      else if (ratingVal >= 4.7) ratingScore = 4;
-      else if (ratingVal >= 4.5) ratingScore = 3;
-      else if (ratingVal >= 4.0) ratingScore = 2;
-      else ratingScore = 1;
+      const rawRating = offering.rating ?? peer.rating;
+      const ratingVal = rawRating != null ? parseFloat(rawRating) : null;
+      let ratingScore = 0;
+      if (ratingVal != null) {
+        if (ratingVal >= 4.9) ratingScore = 5;
+        else if (ratingVal >= 4.7) ratingScore = 4;
+        else if (ratingVal >= 4.5) ratingScore = 3;
+        else if (ratingVal >= 4.0) ratingScore = 2;
+        else ratingScore = 1;
+      }
 
       const matchScore = Math.min(
         100,

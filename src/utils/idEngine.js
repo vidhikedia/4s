@@ -256,7 +256,10 @@ const INITIAL_TEACHER_SKILLS = {
  * Resolves or creates a deterministic Teaching ID for a teacher and a skill.
  * Reuses the existing course number for duplicate offers of the same skill.
  */
-export const getOrAssignTeacherCourse = (teacherStudentId = 'STU001', skillName = '') => {
+export const getOrAssignTeacherCourse = (teacherStudentId = 'STU001', skillName = '', courseSeqHint = null) => {
+  if (courseSeqHint && !isNaN(Number(courseSeqHint))) {
+    return buildTeachingId(teacherStudentId, Number(courseSeqHint));
+  }
   const stuNum = extractStudentNumber(teacherStudentId);
   const normSkill = normalizeSkillName(skillName);
 
@@ -374,12 +377,35 @@ export const getReadableId = (recordOrId, type = '', studentId = 'STU001') => {
     // Check seed map
     if (SEED_DISPLAY_IDS[trimmed]) return SEED_DISPLAY_IDS[trimmed];
 
+    // Compute from backend format TCH-0001
+    const matchTch = trimmed.match(/^TCH[-_]?(\d+)$/i);
+    if (matchTch) {
+      return buildTeachingId(studentId, parseInt(matchTch[1], 10));
+    }
+
     // Check persistent map
     const map = getDisplayIdMap();
     if (map[trimmed]) return map[trimmed];
   }
 
   const record = typeof recordOrId === 'object' ? recordOrId : null;
+
+  // Unmatched or Pending wishlist requests must be treated as awaiting teacher / awaiting reply
+  if (record && (record.status === 'Pending' || record.status === 'Open')) {
+    const isLearningRec =
+      type === 'LRN' ||
+      record.type === 'LRN' ||
+      record.learningId ||
+      record.Request_ID ||
+      record.targetGoal ||
+      record.learningGoal ||
+      record.Desired_Level ||
+      record.desiredLevel;
+    if (isLearningRec) {
+      return AWAITING_TEACHER_ID;
+    }
+  }
+
   const rawId =
     record?.displayId ||
     record?.readableId ||
@@ -397,7 +423,10 @@ export const getReadableId = (recordOrId, type = '', studentId = 'STU001') => {
     if (/^TCR\d{3,4}CRS\d{3,4}$/.test(rawTrimmed)) return rawTrimmed;
     if (SEED_DISPLAY_IDS[rawTrimmed]) {
       const seedVal = SEED_DISPLAY_IDS[rawTrimmed];
-      const isMatchedLive = record && (record.status === 'Matched' || record.teacherId || record.TeacherID || record.teacherStudentId || record.teachingId);
+      const isMatchedLive = record && (record.status === 'Matched' || record.status === 'Accepted');
+      if (record && (record.status === 'Pending' || record.status === 'Open')) {
+        return AWAITING_TEACHER_ID;
+      }
       if (!(seedVal === AWAITING_TEACHER_ID && isMatchedLive)) {
         return seedVal;
       }
@@ -416,25 +445,34 @@ export const getReadableId = (recordOrId, type = '', studentId = 'STU001') => {
     record?.learningGoal;
 
   if (isLearning) {
-    // Unmatched learning request check
+    // Matched ONLY when Accepted or Matched
     const status = record?.status || 'Open';
-    const hasTeacher = record?.teachingId || record?.teacherTcrId || record?.teacherId || record?.TeacherID || record?.teacherStudentId;
-    if (status !== 'Matched' && !hasTeacher) {
+    const isMatched = status === 'Matched' || status === 'Accepted';
+    if (!isMatched) {
       return AWAITING_TEACHER_ID;
     }
 
-    const learnerStuId = record?.learnerStudentId || record?.studentId || record?.Student_ID || studentId;
+    const learnerStuId = record?.learnerStudentId || record?.studentId || record?.Student_ID || record?.LearnerID || studentId;
     let teacherTcr = record?.teacherTcrId || record?.teachingId;
     if (!teacherTcr || !/^TCR\d{3,4}CRS\d{3,4}$/.test(teacherTcr)) {
-      // Derive teacher TCR from skill name if matched
+      // Derive teacher TCR from backend values if available
       const teacherStu = record?.teacherStudentId || record?.teacherId || record?.TeacherID || 'STU004';
-      teacherTcr = getOrAssignTeacherCourse(teacherStu, record?.name || record?.skill || '');
+      const cSeq = record?.skillId || record?.SkillID || (record?.courseId ? parseInt(String(record.courseId).replace(/\D/g, ''), 10) : null);
+      if (cSeq && !isNaN(Number(cSeq))) {
+        teacherTcr = buildTeachingId(teacherStu, cSeq);
+      } else {
+        teacherTcr = getOrAssignTeacherCourse(teacherStu, record?.name || record?.skill || '');
+      }
     }
     return buildLearningId(learnerStuId, teacherTcr);
   }
 
   // Otherwise, it's a Teaching skill
-  const teacherStuId = record?.teacherStudentId || record?.studentId || record?.Student_ID || studentId;
+  const teacherStuId = record?.teacherStudentId || record?.studentId || record?.Student_ID || record?.StudentID || studentId;
+  const cSeq = record?.skillId || record?.SkillID || (record?.courseId ? parseInt(String(record.courseId).replace(/\D/g, ''), 10) : null);
+  if (cSeq && !isNaN(Number(cSeq))) {
+    return buildTeachingId(teacherStuId, cSeq);
+  }
   const skillTitle = record?.name || record?.skill || record?.skillName || '';
   const newTcrId = getOrAssignTeacherCourse(teacherStuId, skillTitle);
 
@@ -637,16 +675,19 @@ export const backfillUserReadableIds = (user) => {
   // Backfill learning requests
   const skillsWanted = (user.skillsWanted || []).map((req) => {
     const rawId = req.id || req.learningId || req.Request_ID;
-    let lrnId = SEED_DISPLAY_IDS[rawId];
+    let lrnId;
 
-    if (!lrnId) {
-      if (req.status === 'Matched') {
+    if (req.status === 'Pending' || req.status === 'Open') {
+      lrnId = AWAITING_TEACHER_ID;
+    } else if (req.status === 'Matched' || req.status === 'Accepted') {
+      lrnId = SEED_DISPLAY_IDS[rawId];
+      if (!lrnId || lrnId === AWAITING_TEACHER_ID) {
         const teacherStuId = req.teacherStudentId || 'STU004';
         const teacherTcr = getOrAssignTeacherCourse(teacherStuId, req.name);
         lrnId = buildLearningId(stuId, teacherTcr);
-      } else {
-        lrnId = AWAITING_TEACHER_ID;
       }
+    } else {
+      lrnId = AWAITING_TEACHER_ID;
     }
 
     if (lrnId !== req.displayId || lrnId !== req.learningId) {

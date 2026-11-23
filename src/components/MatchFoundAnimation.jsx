@@ -699,7 +699,7 @@ function MatchFoundAnimationComponent({
       <ComicBurst stage={stage} shouldReduceMotion={shouldReduceMotion} />
       <BurstSparkles stage={stage} shouldReduceMotion={shouldReduceMotion} />
 
-      {/* Title: "MATCH FOUND!" (Slams in at Stage 3) */}
+      {/* Title: "REQUEST SENT!" in modal mode / "MATCH FOUND!" in showcase */}
       {(stage >= 3 || shouldReduceMotion) && (
         <motion.div
           className="match-found-title-wrap"
@@ -715,7 +715,7 @@ function MatchFoundAnimationComponent({
           }
           transition={{ duration: 0.42, ease: 'easeOut' }}
         >
-          <h2 className="match-found-title">MATCH FOUND!</h2>
+          <h2 className="match-found-title">{mode === 'modal' ? 'REQUEST SENT!' : 'MATCH FOUND!'}</h2>
         </motion.div>
       )}
 
@@ -732,8 +732,10 @@ function MatchFoundAnimationComponent({
       >
         <div className="match-speech-sticker flex flex-col gap-1">
           <div className="flex items-center gap-1.5 flex-wrap">
-            <span className="match-role-badge teacher">TEACH</span>
-            <span>{currentPair.teacherName}: <strong>{currentPair.teacherSkill}</strong></span>
+            <span className="match-role-badge teacher">{mode === 'modal' ? 'TEACHER' : 'TEACH'}</span>
+            <span>
+              {currentPair.teacherName}: <strong>{mode === 'modal' ? `Awaiting reply` : currentPair.teacherSkill}</strong>
+            </span>
           </div>
           <div className="inline-flex mt-0.5">
             <AnimeIdChip
@@ -814,7 +816,7 @@ function MatchFoundAnimationComponent({
         ) : (
           <span className="text-slate-400 font-bold">Matching...</span>
         )}
-        <span className="match-score-tag">Timetable &amp; Skill Aligned</span>
+        <span className="match-score-tag">{mode === 'modal' ? `Awaiting ${currentPair.teacherName}'s reply` : 'Timetable & Skill Aligned'}</span>
       </div>
 
       {mode === 'modal' && (
@@ -832,7 +834,9 @@ function MatchFoundAnimationComponent({
   );
 
   // Screen reader polite announcement
-  const matchAnnouncement = `Match found: ${currentPair.teacherName} teaches ${currentPair.teacherSkill} to ${currentPair.learnerName} with ${currentPair.score}% compatibility.`;
+  const matchAnnouncement = mode === 'modal'
+    ? `Request sent to ${currentPair.teacherName}. Awaiting reply.`
+    : `Match found: ${currentPair.teacherName} teaches ${currentPair.teacherSkill} to ${currentPair.learnerName} with ${currentPair.score}% compatibility.`;
 
   // Render Inline Mode (Landing page showcase)
   if (mode === 'inline') {
@@ -877,7 +881,7 @@ function MatchFoundAnimationComponent({
         className="match-found-modal-dialog"
         role="dialog"
         aria-modal="true"
-        aria-label="Match found"
+        aria-label={mode === 'modal' ? 'Request sent' : 'Match found'}
         onClick={(e) => e.stopPropagation()}
       >
         {/* Close X Button */}

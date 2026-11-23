@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useMemo } from 'react';
+import { createPortal } from 'react-dom';
 import { Link, useNavigate } from 'react-router-dom';
 import { motion, useReducedMotion } from 'framer-motion';
 import {
@@ -23,7 +24,8 @@ import {
   X,
   Sparkles,
   Layers,
-  RotateCcw
+  RotateCcw,
+  Star
 } from 'lucide-react';
 import {
   useAuth,
@@ -32,8 +34,43 @@ import {
   cancelSession
 } from '../utils/auth.js';
 import api from '../utils/api.js';
+import ReviewModal from '../components/ReviewModal.jsx';
 import AnimeIdChip from '../components/AnimeIdChip.jsx';
 import './Sessions.css';
+
+const isSessionStartTimePassed = (session) => {
+  if (!session || !session.date) return false;
+  const now = new Date();
+  const pad = (n) => String(n).padStart(2, '0');
+  const todayStr = `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}`;
+
+  if (session.date < todayStr) return true;
+  if (session.date > todayStr) return false;
+
+  // Session date is today
+  const timeStr = String(session.time || session.StartTime || '').trim();
+  if (!timeStr || timeStr === 'To be confirmed') return true;
+
+  let hours = 0;
+  let minutes = 0;
+  const match12 = timeStr.match(/^(\d{1,2}):(\d{2})\s*(AM|PM)/i);
+  const match24 = timeStr.match(/^(\d{1,2}):(\d{2})/);
+
+  if (match12) {
+    hours = parseInt(match12[1], 10);
+    minutes = parseInt(match12[2], 10);
+    const meridiem = match12[3].toUpperCase();
+    if (meridiem === 'PM' && hours < 12) hours += 12;
+    if (meridiem === 'AM' && hours === 12) hours = 0;
+  } else if (match24) {
+    hours = parseInt(match24[1], 10);
+    minutes = parseInt(match24[2], 10);
+  }
+
+  const sessionStartMinutes = hours * 60 + minutes;
+  const currentMinutes = now.getHours() * 60 + now.getMinutes();
+  return currentMinutes >= sessionStartMinutes;
+};
 
 const Sessions = () => {
   const navigate = useNavigate();
@@ -50,6 +87,13 @@ const Sessions = () => {
   const [isScheduleModalOpen, setIsScheduleModalOpen] = useState(false);
   const [cancelModalSession, setCancelModalSession] = useState(null);
   const [cancelReason, setCancelReason] = useState('');
+  const [isReviewModalOpen, setIsReviewModalOpen] = useState(false);
+  const [reviewModalSession, setReviewModalSession] = useState(null);
+
+  const handleOpenReviewModal = (session) => {
+    setReviewModalSession(session);
+    setIsReviewModalOpen(true);
+  };
 
   // Accepted exchanges for scheduling
   const [acceptedExchanges, setAcceptedExchanges] = useState([]);
@@ -65,6 +109,25 @@ const Sessions = () => {
       })
       .catch(() => {});
   }, [studentId, isScheduleModalOpen]);
+
+  // Lock body scroll and handle Escape key for schedule modal
+  useEffect(() => {
+    if (!isScheduleModalOpen) return;
+    const prevOverflow = document.body.style.overflow;
+    document.body.style.overflow = 'hidden';
+
+    const handleKeyDown = (e) => {
+      if (e.key === 'Escape') {
+        setIsScheduleModalOpen(false);
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+
+    return () => {
+      document.body.style.overflow = prevOverflow;
+      window.removeEventListener('keydown', handleKeyDown);
+    };
+  }, [isScheduleModalOpen]);
 
   // Polling every 10s and on window focus
   useEffect(() => {
@@ -202,6 +265,9 @@ const Sessions = () => {
     try {
       await scheduleSession({
         exchangeId: scheduleForm.exchangeId || null,
+        teacherId: scheduleForm.teacherId || null,
+        learnerId: scheduleForm.learnerId || null,
+        skillId: scheduleForm.skillId || null,
         skill: scheduleForm.skill,
         topic: topicTitle,
         userRole: scheduleForm.userRole,
@@ -595,11 +661,13 @@ const Sessions = () => {
                         <div className="flex items-center gap-1.5 flex-wrap">
                           <span className="participant-role-tag">Mentor / Teacher</span>
                           <span className="font-mono text-[10px] text-slate-500 font-semibold">
-                            {session.teacherStudentId || (session.teacher === user.name ? user.studentId : 'STU002')}
+                            {session.teacherStudentId || (session.TeacherID ? `STU${String(session.TeacherID).padStart(3, '0')}` : (session.teacher === user.name ? user.studentId : ''))}
                           </span>
                         </div>
                         <div className="participant-name">
-                          <span>{session.teacher}</span>
+                          <span>
+                            {session.teacher} {session.teacherStudentId ? `(${session.teacherStudentId})` : (session.TeacherID ? `(STU${String(session.TeacherID).padStart(3, '0')})` : '')}
+                          </span>
                           {session.teacher === user.name && (
                             <span className="participant-you-tag">You</span>
                           )}
@@ -626,11 +694,13 @@ const Sessions = () => {
                         <div className="flex items-center gap-1.5 flex-wrap">
                           <span className="participant-role-tag">Mentee / Learner</span>
                           <span className="font-mono text-[10px] text-slate-500 font-semibold">
-                            {session.learnerStudentId || (session.learner === user.name ? user.studentId : 'STU001')}
+                            {session.learnerStudentId || (session.LearnerID ? `STU${String(session.LearnerID).padStart(3, '0')}` : (session.learner === user.name ? user.studentId : ''))}
                           </span>
                         </div>
                         <div className="participant-name">
-                          <span>{session.learner}</span>
+                          <span>
+                            {session.learner} {session.learnerStudentId ? `(${session.learnerStudentId})` : (session.LearnerID ? `(STU${String(session.LearnerID).padStart(3, '0')})` : '')}
+                          </span>
                           {session.learner === user.name && (
                             <span className="participant-you-tag">You</span>
                           )}
@@ -740,20 +810,22 @@ const Sessions = () => {
                     <div className="session-right-actions">
                       {isUpcoming && (
                         <>
-                          <button
-                            onClick={() => handleMarkCompleted(session)}
-                            className="btn btn-outline"
-                            style={{
-                              color: '#15803d',
-                              borderColor: '#1A1A2E',
-                              backgroundColor: '#ecfdf5',
-                              padding: '0.45rem 0.85rem'
-                            }}
-                            title="Mark this session as successfully completed"
-                          >
-                            <CheckCircle2 size={15} />
-                            <span>Mark Completed</span>
-                          </button>
+                          {isUserTeaching && isSessionStartTimePassed(session) && (
+                            <button
+                              onClick={() => handleMarkCompleted(session)}
+                              className="btn btn-outline"
+                              style={{
+                                color: '#15803d',
+                                borderColor: '#1A1A2E',
+                                backgroundColor: '#ecfdf5',
+                                padding: '0.45rem 0.85rem'
+                              }}
+                              title="Mark this session as successfully completed"
+                            >
+                              <CheckCircle2 size={15} />
+                              <span>Mark Completed</span>
+                            </button>
+                          )}
 
                           <button
                             onClick={() => handleOpenCancelModal(session)}
@@ -771,24 +843,38 @@ const Sessions = () => {
                       )}
 
                       {isCompleted && (
-                        <button
-                          onClick={() => {
-                            setScheduleForm({
-                              ...scheduleForm,
-                              skill: session.skill,
-                              partnerName: session.partnerName,
-                              partnerDept: session.partnerDept || '',
-                              userRole: session.userRole || 'Teacher',
-                              topic: `Follow-up: Advanced ${session.skill}`
-                            });
-                            setIsScheduleModalOpen(true);
-                          }}
-                          className="btn btn-outline-primary"
-                          style={{ padding: '0.45rem 0.85rem' }}
-                        >
-                          <Plus size={14} />
-                          <span>Schedule Follow-Up</span>
-                        </button>
+                        <>
+                          {!session.hasReviewed && (
+                            <button
+                              type="button"
+                              onClick={() => handleOpenReviewModal(session)}
+                              className="btn btn-primary"
+                              style={{ padding: '0.45rem 0.85rem' }}
+                              title="Leave a review for this completed session"
+                            >
+                              <Star size={14} fill="#ffffff" />
+                              <span>Leave review</span>
+                            </button>
+                          )}
+                          <button
+                            onClick={() => {
+                              setScheduleForm({
+                                ...scheduleForm,
+                                skill: session.skill,
+                                partnerName: session.partnerName,
+                                partnerDept: session.partnerDept || '',
+                                userRole: session.userRole || 'Teacher',
+                                topic: `Follow-up: Advanced ${session.skill}`
+                              });
+                              setIsScheduleModalOpen(true);
+                            }}
+                            className="btn btn-outline-primary"
+                            style={{ padding: '0.45rem 0.85rem' }}
+                          >
+                            <Plus size={14} />
+                            <span>Schedule Follow-Up</span>
+                          </button>
+                        </>
                       )}
 
                       {isCancelled && (
@@ -820,26 +906,37 @@ const Sessions = () => {
         )}
 
         {/* Modal: Schedule a Session */}
-        {isScheduleModalOpen && (
-          <div className="modal-overlay">
-            <div className="modal-dialog">
-              <div className="modal-header">
-                <div>
-                  <h3 className="font-bold text-lg">Schedule a Peer Session</h3>
-                  <p className="text-xs text-muted">
-                    Set up a 1-on-1 teaching or learning exchange with a fellow student.
-                  </p>
+        {isScheduleModalOpen &&
+          createPortal(
+            <div className="modal-overlay" onClick={() => setIsScheduleModalOpen(false)}>
+              <div
+                className="modal-dialog"
+                style={{
+                  maxHeight: 'calc(100vh - 2rem)',
+                  maxHeight: 'calc(100dvh - 2rem)',
+                  display: 'flex',
+                  flexDirection: 'column',
+                  overflow: 'hidden'
+                }}
+                onClick={(e) => e.stopPropagation()}
+              >
+                <div className="modal-header" style={{ flexShrink: 0 }}>
+                  <div>
+                    <h3 className="font-bold text-lg">Schedule a Peer Session</h3>
+                    <p className="text-xs text-muted">
+                      Set up a 1-on-1 teaching or learning exchange with a fellow student.
+                    </p>
+                  </div>
+                  <button
+                    className="modal-close-btn"
+                    onClick={() => setIsScheduleModalOpen(false)}
+                  >
+                    <X size={20} />
+                  </button>
                 </div>
-                <button
-                  className="modal-close-btn"
-                  onClick={() => setIsScheduleModalOpen(false)}
-                >
-                  <X size={20} />
-                </button>
-              </div>
 
-              <form onSubmit={handleScheduleSubmit}>
-                <div className="modal-body">
+                <form onSubmit={handleScheduleSubmit} style={{ display: 'flex', flexDirection: 'column', flex: 1, minHeight: 0, overflow: 'hidden' }}>
+                  <div className="modal-body" style={{ flex: 1, overflowY: 'auto', minHeight: 0 }}>
                   {/* Select from Accepted Requests if available */}
                   {acceptedExchanges.length > 0 && (
                     <div className="form-group mb-4">
@@ -856,6 +953,9 @@ const Sessions = () => {
                             setScheduleForm((prev) => ({
                               ...prev,
                               exchangeId: ex.ExchangeID || ex.id,
+                              teacherId: ex.TeacherID || ex.teacherId,
+                              learnerId: ex.LearnerID || ex.learnerId,
+                              skillId: ex.SkillID || ex.skillId,
                               userRole: isTeacher ? 'Teacher' : 'Learner',
                               partnerName: partnerName || '',
                               partnerDept: isTeacher ? (ex.LearnerDept || 'Campus Student') : (ex.TeacherDept || 'Campus Student'),
@@ -1126,7 +1226,7 @@ const Sessions = () => {
                   </div>
                 </div>
 
-                <div className="modal-footer">
+                <div className="modal-footer" style={{ flexShrink: 0 }}>
                   <button
                     type="button"
                     className="btn btn-outline"
@@ -1141,7 +1241,8 @@ const Sessions = () => {
                 </div>
               </form>
             </div>
-          </div>
+          </div>,
+          document.body
         )}
 
         {/* Modal: Confirm Session Cancellation */}
@@ -1204,6 +1305,18 @@ const Sessions = () => {
             </div>
           </div>
         )}
+        {/* Review Modal popup */}
+        <ReviewModal
+          isOpen={isReviewModalOpen}
+          onClose={() => {
+            setIsReviewModalOpen(false);
+            setReviewModalSession(null);
+          }}
+          preselectedExchangeId={reviewModalSession?.exchangeId || reviewModalSession?.ExchangeID}
+          preselectedSessionId={reviewModalSession?.sessionId || reviewModalSession?.SessionID}
+          preselectedRole={reviewModalSession?.userRole || (reviewModalSession?.teacher === user?.name ? 'Teacher' : 'Learner')}
+          onReviewSubmitted={refreshSessions}
+        />
       </div>
     </div>
   );

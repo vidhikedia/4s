@@ -838,8 +838,8 @@ const Achievements = () => {
                   </h3>
 
                   {/* 3. Criterion Text: max 2 lines clamp with full tooltip */}
-                  <p className="ach-card-criterion" title={badge.criterion}>
-                    {badge.criterion}
+                  <p className="ach-card-criterion" title={`How to earn: ${badge.criterion}`}>
+                    <strong className="text-slate-700">How to earn:</strong> {badge.criterion}
                   </p>
 
                   {/* 4. Status Area Pinned to Bottom (margin-top: auto) */}
@@ -847,10 +847,15 @@ const Achievements = () => {
                     {isEarned ? (
                       /* Earned Status: Gold Chip & Earned Date */
                       <div className="ach-status-earned-box">
-                        <span className="status-chip chip-gold">
-                          <CheckCircle2 size={12} />
-                          <span>Earned</span>
-                        </span>
+                        <div className="flex items-center justify-between w-full">
+                          <span className="status-chip chip-gold">
+                            <CheckCircle2 size={12} />
+                            <span>Earned</span>
+                          </span>
+                          <span className="font-bold text-emerald-700 font-mono text-xs">
+                            {progress.current || progress.target} / {progress.target} {progress.unit}
+                          </span>
+                        </div>
                         <span className="status-earned-date">{progress.earnedDate}</span>
                       </div>
                     ) : isInProgress ? (
@@ -883,7 +888,7 @@ const Achievements = () => {
                             <span>Locked</span>
                           </span>
                           <span className="font-bold text-slate-400 font-mono text-[11px]">
-                            0 / {progress.target}
+                            0 / {progress.target} {progress.unit}
                           </span>
                         </div>
                         <span className="ach-remaining-text text-slate-400">
@@ -1090,7 +1095,7 @@ const Achievements = () => {
 
                 {/* Exact Criterion Card */}
                 <div className="ach-drawer-criterion-card">
-                  <span className="ach-drawer-section-lbl">Exact Criterion:</span>
+                  <span className="ach-drawer-section-lbl">How to earn:</span>
                   <p className="ach-drawer-rule-text">{selectedBadge.criterion}</p>
                 </div>
 

@@ -22,6 +22,7 @@ import useLiveRefresh from '../utils/useLiveRefresh.js';
 import api, { normalizeStudentId } from '../utils/api.js';
 import AnimatedCounter from './AnimatedCounter.jsx';
 import MangaCard from './MangaCard.jsx';
+import RatingDisplay from './RatingDisplay.jsx';
 import './Leaderboard.css';
 
 /**
@@ -76,15 +77,16 @@ const Leaderboard = () => {
       const isCurrentUser = Boolean(currentStudentId && numericId === currentStudentId);
 
       const badgesCount = Number(student.badgesCount ?? student.badgeCount ?? 0);
-      const teachingRating = parseFloat(student.teachingRating ?? student.rating ?? 0);
       const teachingReviewsCount = Number(student.teachingReviewsCount ?? student.reviewsCount ?? 0);
+      const teachingRating = teachingReviewsCount > 0 ? parseFloat(student.teachingRating ?? student.rating ?? 0) : null;
       const sessionsTaught = Number(student.sessionsTaught ?? 0);
       const sessionsLearnt = Number(student.sessionsLearnt ?? student.sessionsAttended ?? 0);
 
       // Score formula: (badges earned x 15) + (average teaching rating x 12) + (min(number of teaching reviews, 20) x 2)
+      // Only reviews received as a teacher count; zero reviews gives 0 rating points:
       const rawScore =
         badgesCount * 15 +
-        teachingRating * 12 +
+        (teachingReviewsCount > 0 && teachingRating != null ? teachingRating * 12 : 0) +
         Math.min(teachingReviewsCount, 20) * 2;
       const finalScore = Math.round(rawScore * 10) / 10;
 
@@ -115,7 +117,9 @@ const Leaderboard = () => {
     // 5. earlier StudentID
     allStudentsList.sort((a, b) => {
       if (b.score !== a.score) return b.score - a.score;
-      if (b.teachingRating !== a.teachingRating) return b.teachingRating - a.teachingRating;
+      const aRating = a.teachingRating ?? 0;
+      const bRating = b.teachingRating ?? 0;
+      if (bRating !== aRating) return bRating - aRating;
       if (b.teachingReviewsCount !== a.teachingReviewsCount) {
         return b.teachingReviewsCount - a.teachingReviewsCount;
       }
@@ -356,10 +360,11 @@ const Leaderboard = () => {
                       <Award size={12} className="text-amber-500" />
                       <span>{secondPlace.badgesCount} Badges</span>
                     </span>
-                    <span className="meta-pill-rating" title="Teaching rating">
-                      <Star size={12} className="text-amber-500 fill-amber-400" />
-                      <span>{secondPlace.teachingRating.toFixed(1)}</span>
-                    </span>
+                    <RatingDisplay
+                      rating={secondPlace.teachingRating}
+                      reviewCount={secondPlace.teachingReviewsCount}
+                      starSize={12}
+                    />
                   </div>
                 </div>
 
@@ -429,10 +434,11 @@ const Leaderboard = () => {
                       <Award size={13} className="text-amber-500" />
                       <span>{firstPlace.badgesCount} Badges</span>
                     </span>
-                    <span className="meta-pill-rating" title="Teaching rating">
-                      <Star size={13} className="text-amber-500 fill-amber-400" />
-                      <span>{firstPlace.teachingRating.toFixed(1)}</span>
-                    </span>
+                    <RatingDisplay
+                      rating={firstPlace.teachingRating}
+                      reviewCount={firstPlace.teachingReviewsCount}
+                      starSize={13}
+                    />
                   </div>
                 </div>
 
@@ -500,10 +506,11 @@ const Leaderboard = () => {
                       <Award size={12} className="text-amber-500" />
                       <span>{thirdPlace.badgesCount} Badges</span>
                     </span>
-                    <span className="meta-pill-rating" title="Teaching rating">
-                      <Star size={12} className="text-amber-500 fill-amber-400" />
-                      <span>{thirdPlace.teachingRating.toFixed(1)}</span>
-                    </span>
+                    <RatingDisplay
+                      rating={thirdPlace.teachingRating}
+                      reviewCount={thirdPlace.teachingReviewsCount}
+                      starSize={12}
+                    />
                   </div>
                 </div>
 
@@ -571,17 +578,11 @@ const Leaderboard = () => {
 
                   {/* Teaching Star Rating */}
                   <div className="row-col col-rating">
-                    <div className="row-rating-wrap">
-                      <Star size={13} className="text-amber-500 fill-amber-400" />
-                      <span className="row-rating-val">
-                        {student.teachingRating > 0 ? student.teachingRating.toFixed(1) : '—'}
-                      </span>
-                      {student.teachingReviewsCount > 0 && (
-                        <span className="row-reviews-count">
-                          ({student.teachingReviewsCount} rev)
-                        </span>
-                      )}
-                    </div>
+                    <RatingDisplay
+                      rating={student.teachingRating}
+                      reviewCount={student.teachingReviewsCount}
+                      starSize={13}
+                    />
                   </div>
 
                   {/* Computed Score */}
@@ -644,19 +645,11 @@ const Leaderboard = () => {
 
                 {/* User Teaching Rating */}
                 <div className="row-col col-rating">
-                  <div className="row-rating-wrap">
-                    <Star size={13} className="text-amber-500 fill-amber-400" />
-                    <span className="row-rating-val">
-                      {currentStudentEntry.teachingRating > 0
-                        ? currentStudentEntry.teachingRating.toFixed(1)
-                        : '—'}
-                    </span>
-                    {currentStudentEntry.teachingReviewsCount > 0 && (
-                      <span className="row-reviews-count">
-                        ({currentStudentEntry.teachingReviewsCount} rev)
-                      </span>
-                    )}
-                  </div>
+                  <RatingDisplay
+                    rating={currentStudentEntry.teachingRating}
+                    reviewCount={currentStudentEntry.teachingReviewsCount}
+                    starSize={13}
+                  />
                 </div>
 
                 {/* User Score */}

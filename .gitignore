@@ -6,3 +6,17 @@ coverage/
 *.log
 .env*
 !.env.example
+
+node_modules
+dist
+.env
+*.db
+*.db-journal
+*.db-wal
+*.db-shm
+*.zip
+
+*.db
+*.db-journal
+*.db-wal
+*.db-shm

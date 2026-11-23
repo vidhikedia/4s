@@ -95,22 +95,24 @@ const Login = () => {
         </div>
 
         {/* Quick Demo Login Helper */}
-        <div className="demo-quick-banner">
-          <div className="demo-banner-info">
-            <Sparkles size={16} className="text-primary" />
-            <div>
-              <strong>Demo Account:</strong> {DEFAULT_USER.name}
-              <div style={{ fontSize: '0.8rem', opacity: 0.85 }}>kediavidhi62@gmail.com · password123</div>
+        {import.meta.env.DEV && (
+          <div className="demo-quick-banner">
+            <div className="demo-banner-info">
+              <Sparkles size={16} className="text-primary" />
+              <div>
+                <strong>Demo Account:</strong> {DEFAULT_USER.name}
+                <div style={{ fontSize: '0.8rem', opacity: 0.85 }}>kediavidhi62@gmail.com · password123</div>
+              </div>
             </div>
+            <button
+              type="button"
+              onClick={handleQuickFill}
+              className="demo-fill-btn"
+            >
+              Auto-fill Credentials
+            </button>
           </div>
-          <button
-            type="button"
-            onClick={handleQuickFill}
-            className="demo-fill-btn"
-          >
-            Auto-fill Credentials
-          </button>
-        </div>
+        )}
 
         {statusMessage && (
           <div className={`auth-alert-box auth-alert-${statusMessage.type}`}>

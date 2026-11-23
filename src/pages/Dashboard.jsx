@@ -23,10 +23,11 @@ import {
 import { useAuth, saveUser } from '../utils/auth.js';
 import api from '../utils/api.js';
 import useLiveRefresh from '../utils/useLiveRefresh.js';
+import RatingDisplay from '../components/RatingDisplay.jsx';
 import AnimatedCounter from '../components/AnimatedCounter.jsx';
 import PowerLevelMeter from '../components/PowerLevelMeter.jsx';
 import AnimeIdChip, { AnimeIdGuideButton } from '../components/AnimeIdChip.jsx';
-import { formatShortName, ENROLLED_LEARNERS_MAP } from '../utils/idEngine.js';
+import { formatShortName } from '../utils/idEngine.js';
 import './Dashboard.css';
 
 const Dashboard = () => {
@@ -65,12 +66,12 @@ const Dashboard = () => {
 
   // Filter actual upcoming study sessions (exclude past/cancelled)
   const upcomingList = useMemo(() => {
-    const all = dashboardData?.sessions || user.upcomingSessions || [];
+    const all = dashboardData?.upcomingSessions || user.upcomingSessions || dashboardData?.sessions || [];
     const upcomingOnly = all.filter(
-      (s) => s.status === 'Upcoming' || s.status === 'Scheduled' || (!s.status && s.date >= '2026-10-01')
+      (s) => s.status === 'Upcoming' || s.status === 'Scheduled'
     );
-    return upcomingOnly.length > 0 ? upcomingOnly.slice(0, 3) : all.slice(0, 2);
-  }, [dashboardData?.sessions, user.upcomingSessions]);
+    return upcomingOnly.slice(0, 3);
+  }, [dashboardData?.upcomingSessions, dashboardData?.sessions, user.upcomingSessions]);
 
   return (
     <div className="dashboard-page">
@@ -96,10 +97,7 @@ const Dashboard = () => {
                 <span>·</span>
                 <span>{user.year || '1st Year'}</span>
                 <span>·</span>
-                <span className="flex items-center text-amber-500 font-bold">
-                  <Star size={14} fill="#f59e0b" />
-                  <span className="ml-1 text-slate-800">{user.rating || '5.00'} Peer Rating</span>
-                </span>
+                <RatingDisplay rating={user.rating} reviewCount={user.reviewsCount ?? user.reviewCount} />
               </div>
               <div className="flex items-center gap-2 flex-wrap mt-2">
                 <span className="px-2.5 py-1 rounded bg-indigo-50 border border-indigo-200 text-indigo-700 font-mono text-xs font-bold">
@@ -420,7 +418,7 @@ const Dashboard = () => {
               {user.skillsOffered && user.skillsOffered.length > 0 ? (
                 user.skillsOffered.map((skill) => {
                   const teachingId = skill.teachingId || skill.displayId || 'TCR001CRS001';
-                  const learners = skill.enrolledLearners || ENROLLED_LEARNERS_MAP[teachingId] || [];
+                  const learners = skill.enrolledLearners || [];
 
                   return (
                     <div key={skill.id} className="dash-skill-item">
@@ -449,10 +447,7 @@ const Dashboard = () => {
                             {skill.learnersHelped || 0} helped
                           </span>
                           <span>·</span>
-                          <span className="flex items-center text-amber-500 font-bold">
-                            <Star size={12} fill="#f59e0b" />
-                            <span className="ml-1">{skill.rating}</span>
-                          </span>
+                          <RatingDisplay rating={skill.rating} reviewCount={skill.reviewsCount ?? skill.reviewCount} starSize={12} />
                         </div>
 
                         {/* Enrolled learners list */}
@@ -542,7 +537,7 @@ const Dashboard = () => {
             <div className="dash-skills-list">
               {user.skillsWanted && user.skillsWanted.length > 0 ? (
                 user.skillsWanted.map((wish) => {
-                  const isMatched = wish.status === 'Matched' || (wish.learningId && wish.learningId.startsWith('LRN') && wish.learningId.includes('-TCR'));
+                  const isMatched = wish.status === 'Accepted' || wish.status === 'Matched';
                   const teacherName = wish.teacherName || wish.TeacherName || (wish.teacherStudentId === 'STU010' ? 'Kavita Joshi' : wish.teacherStudentId === 'STU004' ? 'Devansh Parekh' : wish.teacherStudentId === 'STU007' ? 'Rashi Chandani' : wish.teacherStudentId === 'STU008' ? 'Riya Sharma' : 'Campus Mentor');
                   let teacherTcrId = wish.teachingId;
                   if (!teacherTcrId && wish.learningId && wish.learningId.includes('-')) {
@@ -638,7 +633,7 @@ const Dashboard = () => {
                               <span>{wish.category}</span>
                               <span>·</span>
                               <span className="text-amber-600 font-semibold">
-                                Open Request
+                                {wish.status === 'Pending' ? 'Awaiting reply' : 'Open Request'}
                               </span>
                             </div>
                           </>
