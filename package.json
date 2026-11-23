@@ -6,6 +6,7 @@
   "scripts": {
     "dev": "vite",
     "test": "npm --prefix skill-exchange-backend test",
+    "test:pg": "npm --prefix skill-exchange-backend run test:pg",
     "build": "vite build",
     "typecheck": "tsc --noEmit",
     "preview": "vite preview",

@@ -3,7 +3,7 @@
 const http = require('http');
 const crypto = require('crypto');
 const { db, hashPassword, verifyPassword, runMigrations } = require('./db');
-if (typeof runMigrations === 'function') runMigrations();
+if (typeof runMigrations === 'function') runMigrations().catch(() => {});
 
 const PORT = process.env.PORT || 3000;
 const FRONTEND_ORIGIN = process.env.FRONTEND_ORIGIN || 'http://localhost:5173';
@@ -165,10 +165,19 @@ const PUBLIC_STUDENT_COLS = `
 
 function isStudentOnline(lastSeenAt) {
   if (!lastSeenAt) return false;
-  const str = String(lastSeenAt).trim();
-  const iso = str.includes('T') ? str : str.replace(' ', 'T');
-  const utcIso = iso.endsWith('Z') ? iso : iso + 'Z';
-  const lastTime = new Date(utcIso).getTime();
+  let lastTime;
+  if (lastSeenAt instanceof Date) {
+    lastTime = lastSeenAt.getTime();
+  } else {
+    const str = String(lastSeenAt).trim();
+    if (str.endsWith('Z') || /[+-]\d{2}(?::?\d{2})?$/.test(str)) {
+      lastTime = new Date(str).getTime();
+    } else {
+      const iso = str.includes('T') ? str : str.replace(' ', 'T');
+      const utcIso = iso + 'Z';
+      lastTime = new Date(utcIso).getTime();
+    }
+  }
   if (isNaN(lastTime)) return false;
   return Math.abs(Date.now() - lastTime) <= 2 * 60 * 1000;
 }
@@ -2325,11 +2334,13 @@ route('GET', '/api/reports/top-teachers', async () =>
 
 route('GET', '/api/reports/popular-skills', async () =>
   await db.prepare(
-    `SELECT sk.SkillID, sk.SkillName, sk.Category,
-            (SELECT COUNT(*) FROM SKILL_OFFERED so WHERE so.SkillID = sk.SkillID) AS Teachers,
-            (SELECT COUNT(*) FROM SKILL_WANTED sw WHERE sw.SkillID = sk.SkillID) AS Learners,
-            (SELECT COUNT(*) FROM EXCHANGE e WHERE e.SkillID = sk.SkillID) AS TotalExchanges
-     FROM SKILL sk
+    `SELECT * FROM (
+       SELECT sk.SkillID, sk.SkillName, sk.Category,
+              (SELECT COUNT(*) FROM SKILL_OFFERED so WHERE so.SkillID = sk.SkillID) AS Teachers,
+              (SELECT COUNT(*) FROM SKILL_WANTED sw WHERE sw.SkillID = sk.SkillID) AS Learners,
+              (SELECT COUNT(*) FROM EXCHANGE e WHERE e.SkillID = sk.SkillID) AS TotalExchanges
+       FROM SKILL sk
+     ) sub
      ORDER BY (Teachers + Learners + TotalExchanges) DESC`
   ).all());
 

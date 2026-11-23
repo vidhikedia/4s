@@ -236,7 +236,7 @@ async function seedDatabase() {
   const schemaSql = fs.readFileSync(path.join(__dirname, schemaFile), 'utf8');
   await db.exec(schemaSql);
   if (typeof runMigrations === 'function') {
-    runMigrations();
+    await runMigrations();
   }
 
   const addStudent = db.prepare(

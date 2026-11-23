@@ -5,8 +5,9 @@ const path = require('path');
 
 const DATABASE_URL = process.env.DATABASE_URL || '';
 const isPostgres = Boolean(
-  DATABASE_URL &&
-  (DATABASE_URL.startsWith('postgres://') || DATABASE_URL.startsWith('postgresql://'))
+  (DATABASE_URL &&
+    (DATABASE_URL.startsWith('postgres://') || DATABASE_URL.startsWith('postgresql://'))) ||
+    process.env.TEST_PG === 'pglite'
 );
 
 // Canonical PascalCase column names and query aliases
@@ -25,13 +26,14 @@ const CANONICAL_NAMES = [
   'AvailabilityID', 'DayOfWeek', 'EndTime', 'Label', 'Enabled',
   'MessageID', 'SenderID', 'ReceiverID', 'Body', 'SentAt', 'IsRead',
   'BadgeID', 'Title', 'BadgeClass', 'Criterion', 'TargetValue', 'Unit',
-  'EarnedAt', 'ActivityTrigger',
-  'NotificationID', 'Type', 'Link', 'RelatedType', 'RelatedID',
+  'EarnedAt', 'ActivityTrigger', 'Icon',
+  'NotificationID', 'Type', 'Link', 'RelatedType', 'RelatedID', 'Message',
   // Common query aliases
   'TeacherName', 'TeacherEmail', 'TeacherDept', 'TeacherYear', 'TeacherAvatar',
   'LearnerName', 'LearnerEmail', 'LearnerDept', 'LearnerYear', 'LearnerAvatar',
   'ExchangeStatus', 'AvgRating', 'Reviews', 'Teachers', 'Learners', 'TotalExchanges',
-  'Count', 'Pct', 'UnreadCount', 'TaughtCount', 'AttendedCount', 'PartnerID', 'PartnerName', 'PartnerAvatar'
+  'Count', 'Pct', 'UnreadCount', 'TaughtCount', 'AttendedCount', 'PartnerID', 'PartnerName', 'PartnerAvatar',
+  'PeerID', 'SenderName', 'MutualExchange', 'GivenByName', 'Level'
 ];
 
 const CANONICAL_MAP = new Map(CANONICAL_NAMES.map(n => [n.toLowerCase(), n]));
@@ -40,11 +42,12 @@ function normalizeRow(row) {
   if (!row || typeof row !== 'object') return row;
   const normalized = {};
   for (const [key, value] of Object.entries(row)) {
-    normalized[key] = value;
     const lower = key.toLowerCase();
     const canon = CANONICAL_MAP.get(lower);
-    if (canon && canon !== key) {
+    if (canon) {
       normalized[canon] = value;
+    } else {
+      normalized[key] = value;
     }
   }
   return new Proxy(normalized, {
@@ -97,13 +100,49 @@ function transformSqlForPostgres(sql) {
 let db;
 
 if (isPostgres) {
-  const { Pool } = require('pg');
-  const pool = new Pool({
-    connectionString: DATABASE_URL,
-    ssl: DATABASE_URL.includes('localhost') ? false : { rejectUnauthorized: false },
-    max: 10,
-    idleTimeoutMillis: 30000,
-  });
+  const pg = require('pg');
+
+  // Configure pg type parsers: parse bigint (OID 20) and numeric (OID 1700) as JavaScript numbers
+  pg.types.setTypeParser(20, (val) => (val === null ? null : Number(val)));
+  pg.types.setTypeParser(1700, (val) => (val === null ? null : Number(val)));
+
+  // Preserve timestamps and dates as strings consistent with SQLite behavior
+  pg.types.setTypeParser(1114, (val) => (val === null ? null : String(val)));
+  pg.types.setTypeParser(1184, (val) => (val === null ? null : String(val)));
+  pg.types.setTypeParser(1082, (val) => (val === null ? null : String(val)));
+
+  let pool;
+  if (process.env.TEST_PG === 'pglite') {
+    const { PGlite } = require('@electric-sql/pglite');
+    const pgliteInstance = new PGlite({
+      parsers: {
+        20: (v) => pg.types.getTypeParser(20)(v),
+        1700: (v) => pg.types.getTypeParser(1700)(v),
+        1114: (v) => pg.types.getTypeParser(1114)(v),
+        1184: (v) => pg.types.getTypeParser(1184)(v),
+        1082: (v) => pg.types.getTypeParser(1082)(v),
+      }
+    });
+    pool = {
+      async query(sql, params = []) {
+        return await pgliteInstance.query(sql, params);
+      },
+      async exec(sql) {
+        return await pgliteInstance.exec(sql);
+      },
+      async end() {
+        return await pgliteInstance.close();
+      }
+    };
+  } else {
+    const { Pool } = require('pg');
+    pool = new Pool({
+      connectionString: DATABASE_URL,
+      ssl: DATABASE_URL.includes('localhost') ? false : { rejectUnauthorized: false },
+      max: 10,
+      idleTimeoutMillis: 30000,
+    });
+  }
 
   db = {
     isPostgres: true,
@@ -123,7 +162,7 @@ if (isPostgres) {
           const isInsert = /^INSERT\s+INTO\s+/i.test(executeSql);
           const hasReturning = /\bRETURNING\b/i.test(executeSql);
           if (isInsert && !hasReturning) {
-            executeSql += ' RETURNING *';
+            executeSql = executeSql.replace(/;+\s*$/, '') + ' RETURNING *';
           }
           const res = await pool.query(executeSql, params.flat());
           let lastInsertRowid = null;
@@ -136,7 +175,7 @@ if (isPostgres) {
             }
           }
           return {
-            changes: res.rowCount || 0,
+            changes: (res.rowCount != null ? res.rowCount : res.affectedRows) || 0,
             lastInsertRowid,
           };
         }
@@ -144,6 +183,9 @@ if (isPostgres) {
     },
     async exec(sql) {
       const transformed = transformSqlForPostgres(sql);
+      if (pool.exec) {
+        return await pool.exec(transformed);
+      }
       return await pool.query(transformed);
     },
     async query(sql, params = []) {
@@ -197,7 +239,20 @@ if (isPostgres) {
 // Safe migrations
 function safeAddColumn(sql) {
   try {
-    db.exec(sql);
+    const res = db.exec(sql);
+    if (res && typeof res.then === 'function') {
+      return res.catch((err) => {
+        if (err && err.message && (
+          err.message.toLowerCase().includes('duplicate column') ||
+          err.message.toLowerCase().includes('already exists') ||
+          err.message.toLowerCase().includes('no such table') ||
+          err.message.toLowerCase().includes('does not exist')
+        )) {
+          return;
+        }
+        throw err;
+      });
+    }
   } catch (err) {
     if (err && err.message && (
       err.message.toLowerCase().includes('duplicate column') ||
@@ -213,11 +268,24 @@ function safeAddColumn(sql) {
 
 function safeCreateIndex(sql) {
   try {
-    db.exec(sql);
+    const res = db.exec(sql);
+    if (res && typeof res.then === 'function') {
+      return res.catch((err) => {
+        if (err && err.message && (
+          err.message.toLowerCase().includes('no such table') ||
+          err.message.toLowerCase().includes('does not exist') ||
+          err.message.toLowerCase().includes('already exists')
+        )) {
+          return;
+        }
+        throw err;
+      });
+    }
   } catch (err) {
     if (err && err.message && (
       err.message.toLowerCase().includes('no such table') ||
-      err.message.toLowerCase().includes('does not exist')
+      err.message.toLowerCase().includes('does not exist') ||
+      err.message.toLowerCase().includes('already exists')
     )) {
       return;
     }
@@ -225,10 +293,10 @@ function safeCreateIndex(sql) {
   }
 }
 
-function safeCreateUniquePartialIndex() {
+async function safeCreateUniquePartialIndex() {
   try {
     if (isPostgres) {
-      db.exec("CREATE UNIQUE INDEX IF NOT EXISTS idx_exchange_active_unique ON EXCHANGE(TeacherID, LearnerID, SkillID) WHERE Status IN ('Pending', 'Accepted');");
+      await db.exec("CREATE UNIQUE INDEX IF NOT EXISTS idx_exchange_active_unique ON EXCHANGE(TeacherID, LearnerID, SkillID) WHERE Status IN ('Pending', 'Accepted');");
     } else {
       const tbl = db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='EXCHANGE'").get();
       if (!tbl) return;
@@ -254,15 +322,29 @@ function safeCreateUniquePartialIndex() {
   }
 }
 
-function runMigrations() {
+async function ensureSchema() {
   if (isPostgres) {
+    try {
+      const res = await pool.query("SELECT 1 FROM information_schema.tables WHERE table_name = 'student' LIMIT 1;");
+      if (!res.rows || res.rows.length === 0) {
+        const fs = require('fs');
+        const schemaSql = fs.readFileSync(path.join(__dirname, 'schema.pg.sql'), 'utf8');
+        await db.exec(schemaSql);
+      }
+    } catch (e) {}
+  }
+}
+
+async function runMigrations() {
+  if (isPostgres) {
+    await ensureSchema();
     // Postgres safe migrations
-    safeAddColumn('ALTER TABLE EXCHANGE ADD COLUMN IF NOT EXISTS Note TEXT;');
-    safeAddColumn('ALTER TABLE EXCHANGE ADD COLUMN IF NOT EXISTS UpdatedAt TIMESTAMP DEFAULT CURRENT_TIMESTAMP;');
-    safeAddColumn('ALTER TABLE NOTIFICATION ADD COLUMN IF NOT EXISTS RelatedType TEXT;');
-    safeAddColumn('ALTER TABLE NOTIFICATION ADD COLUMN IF NOT EXISTS RelatedID TEXT;');
-    safeAddColumn('ALTER TABLE STUDENT ADD COLUMN IF NOT EXISTS LastSeenAt TIMESTAMP;');
-    safeAddColumn('ALTER TABLE STUDENT ADD COLUMN IF NOT EXISTS SkillMasterShown INTEGER DEFAULT 0;');
+    await safeAddColumn('ALTER TABLE EXCHANGE ADD COLUMN IF NOT EXISTS Note TEXT;');
+    await safeAddColumn('ALTER TABLE EXCHANGE ADD COLUMN IF NOT EXISTS UpdatedAt TIMESTAMP DEFAULT CURRENT_TIMESTAMP;');
+    await safeAddColumn('ALTER TABLE NOTIFICATION ADD COLUMN IF NOT EXISTS RelatedType TEXT;');
+    await safeAddColumn('ALTER TABLE NOTIFICATION ADD COLUMN IF NOT EXISTS RelatedID TEXT;');
+    await safeAddColumn('ALTER TABLE STUDENT ADD COLUMN IF NOT EXISTS LastSeenAt TIMESTAMP;');
+    await safeAddColumn('ALTER TABLE STUDENT ADD COLUMN IF NOT EXISTS SkillMasterShown INTEGER DEFAULT 0;');
   } else {
     // SQLite safe migrations
     safeAddColumn('ALTER TABLE EXCHANGE ADD COLUMN Note TEXT;');
@@ -273,15 +355,15 @@ function runMigrations() {
     safeAddColumn('ALTER TABLE STUDENT ADD COLUMN SkillMasterShown INTEGER DEFAULT 0;');
   }
 
-  safeCreateIndex('CREATE INDEX IF NOT EXISTS idx_exchange_skill ON EXCHANGE(SkillID);');
-  safeCreateIndex('CREATE INDEX IF NOT EXISTS idx_exchange_status ON EXCHANGE(Status);');
-  safeCreateIndex('CREATE INDEX IF NOT EXISTS idx_session_exchange ON SESSION(ExchangeID);');
-  safeCreateIndex('CREATE INDEX IF NOT EXISTS idx_session_status_date ON SESSION(Status, SessionDate);');
-  safeCreateIndex('CREATE INDEX IF NOT EXISTS idx_feedback_exchange ON FEEDBACK(ExchangeID);');
-  safeCreateIndex('CREATE INDEX IF NOT EXISTS idx_feedback_givenby ON FEEDBACK(GivenBy);');
-  safeCreateIndex('CREATE INDEX IF NOT EXISTS idx_message_receiver_read ON MESSAGE(ReceiverID, IsRead);');
-  safeCreateIndex('CREATE INDEX IF NOT EXISTS idx_notification_student_read ON NOTIFICATION(StudentID, IsRead);');
-  safeCreateUniquePartialIndex();
+  await safeCreateIndex('CREATE INDEX IF NOT EXISTS idx_exchange_skill ON EXCHANGE(SkillID);');
+  await safeCreateIndex('CREATE INDEX IF NOT EXISTS idx_exchange_status ON EXCHANGE(Status);');
+  await safeCreateIndex('CREATE INDEX IF NOT EXISTS idx_session_exchange ON SESSION(ExchangeID);');
+  await safeCreateIndex('CREATE INDEX IF NOT EXISTS idx_session_status_date ON SESSION(Status, SessionDate);');
+  await safeCreateIndex('CREATE INDEX IF NOT EXISTS idx_feedback_exchange ON FEEDBACK(ExchangeID);');
+  await safeCreateIndex('CREATE INDEX IF NOT EXISTS idx_feedback_givenby ON FEEDBACK(GivenBy);');
+  await safeCreateIndex('CREATE INDEX IF NOT EXISTS idx_message_receiver_read ON MESSAGE(ReceiverID, IsRead);');
+  await safeCreateIndex('CREATE INDEX IF NOT EXISTS idx_notification_student_read ON NOTIFICATION(StudentID, IsRead);');
+  await safeCreateUniquePartialIndex();
 }
 
 if (!isPostgres) {

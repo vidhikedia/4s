@@ -4,7 +4,10 @@ const fs = require('fs');
 const crypto = require('crypto');
 
 // Isolated temporary database for testing - never touches skillexchange.db
-const isPostgres = Boolean(process.env.DATABASE_URL && (process.env.DATABASE_URL.startsWith('postgres://') || process.env.DATABASE_URL.startsWith('postgresql://')));
+const isPostgres = Boolean(
+  (process.env.DATABASE_URL && (process.env.DATABASE_URL.startsWith('postgres://') || process.env.DATABASE_URL.startsWith('postgresql://'))) ||
+  process.env.TEST_PG === 'pglite'
+);
 const tempDbPath = !isPostgres ? path.join(os.tmpdir(), `test_skillexchange_${Date.now()}_${Math.random().toString(36).slice(2)}.db`) : '';
 if (!isPostgres) {
   process.env.DB_PATH = tempDbPath;
@@ -1456,6 +1459,32 @@ function check(name, cond, extra = '') {
   const appJsxContent = fs.readFileSync(appJsxPath, 'utf-8');
   check('Part 4 Static: /matches route exists in App.jsx', appJsxContent.includes('path="matches"') || appJsxContent.includes("path='matches'"));
   check('Part 4 Static: /profile route exists in App.jsx', appJsxContent.includes('path="profile"') || appJsxContent.includes("path='profile'"));
+
+  // API count fields type validation (must be JavaScript numbers, never strings)
+  const unreadRes = await call('GET', `/api/students/${p4_new_id}/notifications/unread-count`, null, { Authorization: `Bearer ${p4_new_token}` });
+  const profRes = await call('GET', `/api/students/${p4_new_id}`, null, { Authorization: `Bearer ${p4_new_token}` });
+  const dashRes = await call('GET', `/api/students/${p4_new_id}/dashboard`, null, { Authorization: `Bearer ${p4_new_token}` });
+  const lbCheckRes = await call('GET', '/api/leaderboard', null, { Authorization: '' });
+  const dbCountCheck = await db.prepare('SELECT COUNT(*) AS c FROM MESSAGE').get();
+
+  const countFieldsAreNotStrings =
+    typeof unreadRes.data?.count === 'number' &&
+    typeof unreadRes.data?.unreadCount === 'number' &&
+    typeof profRes.data?.reviewCount === 'number' &&
+    typeof profRes.data?.reviewsCount === 'number' &&
+    typeof dashRes.data?.stats?.reviewCount === 'number' &&
+    typeof dashRes.data?.stats?.reviewsCount === 'number' &&
+    typeof dashRes.data?.stats?.sessionsTaught === 'number' &&
+    typeof dashRes.data?.stats?.sessionsAttended === 'number' &&
+    Array.isArray(lbCheckRes.data) && lbCheckRes.data.length > 0 &&
+    lbCheckRes.data.every(e =>
+      typeof e.sessionsTaught === 'number' &&
+      typeof e.sessionsLearnt === 'number' &&
+      typeof (e.reviewsCount ?? e.reviews ?? 0) === 'number'
+    ) &&
+    typeof dbCountCheck?.c === 'number';
+
+  check('Unit test: all API count fields (unreadCount, reviewCount, taught, learnt, counters) are numbers and not strings', countFieldsAreNotStrings);
 
   console.log(`\n${passed} passed, ${failed} failed`);
   if (testServer) {
